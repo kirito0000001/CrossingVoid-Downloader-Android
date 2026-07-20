@@ -1,0 +1,87 @@
+apply plugin: 'com.android.application'
+
+def launcherVersionCodeValue = (project.findProperty('launcherVersionCode') ?: '1').toString().toInteger()
+def launcherVersionNameValue = (project.findProperty('launcherVersionName') ?: '1.0.0').toString()
+def gameSigningStorePath = System.getenv('CROSSINGVOID_GAME_KEYSTORE') ?:
+    new File(System.getProperty('user.home'), '.android/debug.keystore').absolutePath
+def gameSigningStoreFile = file(gameSigningStorePath)
+def gameSigningStorePassword = System.getenv('CROSSINGVOID_GAME_KEYSTORE_PASSWORD') ?: 'android'
+def gameSigningKeyAlias = System.getenv('CROSSINGVOID_GAME_KEY_ALIAS') ?: 'androiddebugkey'
+def gameSigningKeyPassword = System.getenv('CROSSINGVOID_GAME_KEY_PASSWORD') ?: gameSigningStorePassword
+def releaseSigningConfigured = gameSigningStoreFile.isFile()
+
+android {
+    namespace = "com.lingjing.launcher.android"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.TFAC.CorssingVoid"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode launcherVersionCodeValue
+        versionName launcherVersionNameValue
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (releaseSigningConfigured) {
+                storeFile gameSigningStoreFile
+                storePassword gameSigningStorePassword
+                keyAlias gameSigningKeyAlias
+                keyPassword gameSigningKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    def needsReleaseSigning = graph.allTasks.any { task ->
+        task.project == project && task.name.toLowerCase().contains('release') &&
+            (task.name.toLowerCase().contains('assemble') || task.name.toLowerCase().contains('package') || task.name.toLowerCase().contains('validate'))
+    }
+    if (needsReleaseSigning && !releaseSigningConfigured) {
+        throw new GradleException("没有找到游戏签名文件：${gameSigningStorePath}")
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
