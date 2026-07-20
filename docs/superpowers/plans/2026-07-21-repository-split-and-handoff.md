@@ -16,11 +16,11 @@
 - Create: `docs/AndroidLauncherDevelopmentGuide.md`
 - Modify: `README.md`
 
-- [ ] Describe the Vue/Capacitor/native Java boundaries and the same-package installer model.
-- [ ] Record the APK plus OBB download, verification, extraction, installation, and recovery state machine.
-- [ ] Record OSS signing, GitHub chunks, Gitee launcher updates, the 3 GB quota gate, logs, permissions, build tools, and release checks.
-- [ ] Add exact commands, file map, troubleshooting notes, and release checklists.
-- [ ] Correct the obsolete README statement that claimed OBB required a cross-package importer.
+- [x] Describe the Vue/Capacitor/native Java boundaries and the same-package installer model.
+- [x] Record the APK plus OBB download, verification, extraction, installation, and recovery state machine.
+- [x] Record OSS signing, GitHub chunks, Gitee launcher updates, the 3 GB quota gate, logs, permissions, build tools, and release checks.
+- [x] Add exact commands, file map, troubleshooting notes, and release checklists.
+- [x] Correct the obsolete README statement that claimed OBB required a cross-package importer.
 
 ### Task 2: Lock Repository URLs With Tests
 
@@ -31,10 +31,10 @@
 - Modify: `Scripts/Publish-AndroidLauncher.ps1`
 - Modify: `README.md`
 
-- [ ] Add assertions requiring `CrossingVoid-Downloader-Android` and rejecting the old mixed repository name.
-- [ ] Run `npm.cmd test -- tests/launcherPublishing.test.ts` and verify it fails on the old URLs.
-- [ ] Update Android manifest, release publishing, account, and documentation URLs.
-- [ ] Re-run the focused test and verify it passes.
+- [x] Add assertions requiring `CrossingVoid-Downloader-Android` and rejecting the old mixed repository name.
+- [x] Run `npm.cmd test -- tests/launcherPublishing.test.ts` and verify it fails on the old URLs.
+- [x] Update Android manifest, release publishing, account, and documentation URLs.
+- [x] Re-run the focused test and verify it passes.
 
 ### Task 3: Point PC Source At Its Renamed Repository
 
@@ -42,16 +42,16 @@
 - Modify: `D:/UnrealMap/CrossingVoidinitiator-PC/src-tauri/tauri.conf.json`
 - Modify: `D:/UnrealMap/CrossingVoidinitiator-PC/Scripts/Publish-LauncherGiteePackage.ps1`
 
-- [ ] Replace the mixed Gitee repository with `CrossingVoid-Downloader-PC`.
-- [ ] Run the PC launcher update-related tests or source validation commands.
+- [x] Replace the mixed Gitee repository with `CrossingVoid-Downloader-PC`.
+- [x] Run the PC launcher update-related tests or source validation commands.
 
 ### Task 4: Create And Seed The Android Gitee Release Repository
 
-- [ ] Create `xiaojie578/CrossingVoid-Downloader-Android` with `master` as its default branch.
-- [ ] Publish `launcher/android-installer-latest.json` and an explanatory README.
-- [ ] Create an Android launcher release using the next version and upload its APK.
-- [ ] Confirm the manifest URL, release URL, APK size, and SHA-256.
-- [ ] Remove Android manifests and Android releases from `CrossingVoid-Downloader-PC` so it is PC-only.
+- [x] Create `xiaojie578/CrossingVoid-Downloader-Android` with `master` as its default branch.
+- [x] Publish `launcher/android-installer-latest.json` and an explanatory README.
+- [x] Create an Android launcher release using the next version and upload its APK.
+- [x] Confirm the manifest URL, release URL, APK size, and SHA-256.
+- [x] Remove Android manifests and Android releases from `CrossingVoid-Downloader-PC` so it is PC-only.
 
 ### Task 5: Publish Android Source To GitHub
 
@@ -59,16 +59,16 @@
 - Modify: `.gitignore`
 - Create: local Git metadata
 
-- [ ] Ignore build output, Capacitor-generated web output, local Android SDK paths, signing material, APK/AAB files, logs, and local scratch folders.
-- [ ] Verify no token, keystore, password, APK, OBB, node_modules, Gradle cache, or build output is tracked.
-- [ ] Initialize the repository and commit the reviewed source tree.
-- [ ] Create `kirito0000001/CrossingVoid-Downloader-Android` on GitHub and push the initial branch.
+- [x] Ignore build output, Capacitor-generated web output, local Android SDK paths, signing material, APK/AAB files, logs, and local scratch folders.
+- [x] Verify no token, keystore, password, APK, OBB, node_modules, Gradle cache, or build output is tracked.
+- [x] Initialize the repository and commit the reviewed source tree.
+- [x] Create `kirito0000001/CrossingVoid-Downloader-Android` on GitHub and push the initial branch.
 
 ### Task 6: Verify End To End
 
-- [ ] Run `npm.cmd test` and require all tests to pass.
-- [ ] Run `npm.cmd run build` and `npx.cmd cap sync android`.
-- [ ] Build the release APK with JDK 23 and verify package, version, certificate, size, and SHA-256.
-- [ ] Verify Gitee raw manifest and release download return success.
-- [ ] Verify the website Android download resolves through the new repository.
-- [ ] Verify GitHub contains source only and no private signing material.
+- [x] Run `npm.cmd test` and require all tests to pass.
+- [x] Run `npm.cmd run build` and `npx.cmd cap sync android`.
+- [x] Build the release APK with JDK 23 and verify package, version, certificate, size, and SHA-256.
+- [x] Verify Gitee raw manifest and release download return success.
+- [x] Verify the website Android download resolves through the new repository.
+- [x] Verify GitHub contains source only and no private signing material.
