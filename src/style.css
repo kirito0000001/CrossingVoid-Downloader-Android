@@ -33,7 +33,7 @@
   -webkit-font-smoothing: antialiased;
 }
 
-@supports (height: clamp(1px, 2px, 3px)) {
+@supports (height: 1svh) and (height: clamp(1px, 2px, 3px)) {
   :root {
     --topbar-height: clamp(64px, 16svh, 112px);
     --bottom-height: clamp(75px, 17.6svh, 123px);

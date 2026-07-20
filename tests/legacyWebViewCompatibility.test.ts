@@ -23,7 +23,8 @@ describe("legacy Android WebView compatibility", () => {
 
   it("keeps critical shell geometry when inset, clamp and svh are unsupported", () => {
     expect(styleSource).toContain("--topbar-height: 84px;");
-    expect(styleSource).toContain("@supports (height: clamp(1px, 2px, 3px))");
+    expect(styleSource).toContain("@supports (height: 1svh) and (height: clamp(1px, 2px, 3px))");
+    expect(styleSource).not.toContain("@supports (height: clamp(1px, 2px, 3px)) {");
     expect(styleSource).toMatch(/\.launcher-shell\s*\{[\s\S]*height:\s*100vh;[\s\S]*height:\s*100svh;/);
     expect(styleSource).toMatch(/\.pages\s*\{[\s\S]*top:\s*var\(--topbar-height\);[\s\S]*right:\s*0;[\s\S]*bottom:\s*0;[\s\S]*left:\s*0;/);
     expect(styleSource).toMatch(/\.page\s*\{[\s\S]*top:\s*0;[\s\S]*right:\s*0;[\s\S]*bottom:\s*0;[\s\S]*left:\s*0;/);
