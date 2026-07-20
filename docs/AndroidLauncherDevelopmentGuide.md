@@ -2,6 +2,14 @@
 
 本文档面向第一次接手项目的开发者或 AI。目标是只读取本文档和仓库源码，就能理解启动器为什么这样设计、如何构建、如何发布，以及哪些做法会造成无法安装、丢失 OBB、旧版断更或 OSS 流量失控。
 
+PAK、main OBB、patch OBB、APK 更新边界及后续补丁实现顺序见：
+
+```text
+docs/GamePakAndAndroidObbPatchDesign.md
+```
+
+该文件当前是设计记录，不代表 patch OBB 已经实装。
+
 ## 1. 项目边界
 
 - Android 启动器源码：`D:\UnrealMap\CrossingVoidinitiator-Android`
