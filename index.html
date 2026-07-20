@@ -4,10 +4,54 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>crossingvoidinitiator-android</title>
+    <title>零境启动器</title>
+    <style>
+      #launcher-compatibility-fallback {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+        color: #f7f3e7;
+        background: #0b1014;
+        font-family: sans-serif;
+        text-align: center;
+        opacity: 0;
+        animation: show-compatibility-fallback 0s 2500ms forwards;
+      }
+      #launcher-compatibility-fallback strong,
+      #launcher-compatibility-fallback span {
+        display: block;
+      }
+      #launcher-compatibility-fallback strong {
+        color: #f2cc67;
+        font-size: 22px;
+      }
+      #launcher-compatibility-fallback span {
+        margin-top: 10px;
+        color: #c4c8ca;
+        font-size: 15px;
+        line-height: 1.6;
+      }
+      @keyframes show-compatibility-fallback {
+        to { opacity: 1; }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div id="launcher-compatibility-fallback" class="launcher-compatibility-fallback">
+        <div>
+          <strong>启动器界面无法加载</strong>
+          <span>请更新 Android System WebView 或 Chrome 后重新打开。</span>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

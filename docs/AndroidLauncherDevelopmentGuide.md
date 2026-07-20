@@ -155,12 +155,12 @@ https://gitee.com/xiaojie578/CrossingVoid-Downloader-Android/raw/master/launcher
 {
   "schemaVersion": 1,
   "productKey": "crossingvoid-launcher-android-installer",
-  "versionName": "1.0.24",
+  "versionName": "1.0.25",
   "versionCode": 1,
   "notes": "更新说明",
   "publishedAt": "UTC ISO-8601",
   "asset": {
-    "fileName": "CrossingVoidInstaller-1.0.24-Android.apk",
+    "fileName": "CrossingVoidInstaller-1.0.25-Android.apk",
     "url": "Gitee Release APK URL",
     "sizeBytes": 1,
     "sha256": "64位小写十六进制"
@@ -343,6 +343,23 @@ GET https://www.crossingvoid.top/api/toolbox-updates/traffic-status
 - 主按钮图标必须对应状态：下载、暂停、安装、启动、刷新不能混用。
 - Android 点击区域要比 PC 大，上下栏与分页按钮也要适配触控。
 
+### 14.1 旧平板与 x86 WebView 兼容
+
+APK 当前不包含 `lib/<abi>/*.so`，业务层是 Java + Web 资源，因此同一 APK 可以安装到 ARM 与 x86。x86 设备黑屏时不要先添加假的 `abiFilters`；先检查系统 WebView 是否能执行当前前端产物。
+
+项目 `minSdkVersion = 24`，Android 7 出厂 WebView 可能只有 Chrome 51。Vite 必须通过 `@vitejs/plugin-legacy` 同时生成 `type="module"` 和 `nomodule` 入口，目标基线保持 `Chrome >= 51`。`src/style.css` 的关键全屏几何必须为 `inset`、`clamp()` 和 `svh` 保留旧语法回退。
+
+`index.html` 在 Vue 挂载前保留一个延迟显示的兼容提示。如果 modern 与 legacy 脚本都没有启动，用户应看到“请更新 Android System WebView 或 Chrome”，不能只剩黑色背景。
+
+发布前检查：
+
+```powershell
+npm.cmd run build
+rg -n "nomodule|vite-legacy-entry|launcher-compatibility-fallback" dist\index.html
+```
+
+升级 Vite、Vue 或 Capacitor 后，必须重新运行 `tests/legacyWebViewCompatibility.test.ts`，并确认 Android APK 的 `assets/public/index.html` 仍含 legacy 入口。
+
 ## 15. 构建环境
 
 已验证组合：
@@ -371,13 +388,13 @@ npm.cmd test
 npm.cmd run build
 npx.cmd cap sync android
 cd android
-.\gradlew.bat assembleRelease -PlauncherVersionName=1.0.24 -PlauncherVersionCode=1 --console=plain --no-daemon
+.\gradlew.bat assembleRelease -PlauncherVersionName=1.0.25 -PlauncherVersionCode=1 --console=plain --no-daemon
 ```
 
 发布优先使用统一脚本：
 
 ```powershell
-.\Scripts\Publish-AndroidLauncher.ps1 -VersionName 1.0.24 -VersionCode 1 -Notes "更新说明"
+.\Scripts\Publish-AndroidLauncher.ps1 -VersionName 1.0.25 -VersionCode 1 -Notes "更新说明"
 ```
 
 脚本必须完成：测试、Web 构建、Capacitor 同步、Gradle Release、包名检查、版本检查、签名检查、SHA-256、Gitee Release 上传和 latest 清单提交。

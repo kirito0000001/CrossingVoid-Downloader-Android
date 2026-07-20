@@ -31,6 +31,7 @@ D:\UnrealMap\CrossingVoidinitiator-Android
 - 合并、解压、APK 安装和 OBB 安装兼容检测
 - 打开未知来源安装权限设置
 - 拉起系统 APK 安装器和游戏入口
+- 为 Android 7 时代 WebView 同时输出 modern/legacy 脚本，兼容旧平板与 x86 设备
 
 Github 源对应 `Android-V<版本>` Release，提示“需要魔法”。系统通知只显示固定下载文案和进度条。
 
@@ -54,7 +55,7 @@ https://gitee.com/xiaojie578/CrossingVoid-Downloader-Android/raw/master/launcher
 发布命令：
 
 ```powershell
-.\Scripts\Publish-AndroidLauncher.ps1 -VersionName 1.0.24 -VersionCode 1 -Notes "更新说明"
+.\Scripts\Publish-AndroidLauncher.ps1 -VersionName 1.0.25 -VersionCode 1 -Notes "更新说明"
 ```
 
 Release APK 必须使用与游戏相同的签名。发布脚本从以下环境变量读取签名配置：

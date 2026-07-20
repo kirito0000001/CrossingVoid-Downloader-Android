@@ -19,8 +19,8 @@
   --cv-panel-soft: rgba(17, 23, 28, 0.84);
   --cv-line: rgba(242, 204, 103, 0.36);
   --cv-danger: #ff918b;
-  --topbar-height: clamp(64px, 16svh, 112px);
-  --bottom-height: clamp(75px, 17.6svh, 123px);
+  --topbar-height: 84px;
+  --bottom-height: 96px;
   --cv-download-progress-start: #d3aa49;
   --cv-download-progress-end: #ffe074;
   --cv-download-progress-border: rgba(242, 204, 103, 0.5);
@@ -31,6 +31,13 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+@supports (height: clamp(1px, 2px, 3px)) {
+  :root {
+    --topbar-height: clamp(64px, 16svh, 112px);
+    --bottom-height: clamp(75px, 17.6svh, 123px);
+  }
 }
 
 * {
@@ -57,6 +64,7 @@ button {
 
 .launcher-shell {
   width: 100%;
+  height: 100vh;
   height: 100svh;
   min-width: 640px;
   min-height: 340px;
@@ -79,6 +87,10 @@ button {
   content: "";
   position: absolute;
   z-index: 20;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
   pointer-events: none;
   background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(255, 255, 255, 0.012) 4px);
@@ -87,16 +99,21 @@ button {
 .topbar {
   position: absolute;
   z-index: 10;
+  top: 0;
+  right: 0;
+  left: 0;
   inset: 0 0 auto;
   height: var(--topbar-height);
   display: flex;
   align-items: center;
+  padding: 10px 28px;
   padding: 10px clamp(20px, 3vw, 36px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.13);
   background: linear-gradient(180deg, rgba(6, 9, 12, 0.88), rgba(6, 9, 12, 0.4));
 }
 
 .brand-logo {
+  width: 210px;
   width: clamp(165px, 21vw, 245px);
   max-height: 88%;
   object-fit: contain;
@@ -106,7 +123,9 @@ button {
 }
 
 .top-versions {
+  margin-left: -58px;
   margin-left: clamp(-72px, -6vw, -48px);
+  padding-left: 8px;
   padding-left: clamp(7px, 0.75vw, 10px);
   border-left: 1px solid rgba(255, 255, 255, 0.18);
   display: grid;
@@ -147,6 +166,10 @@ button {
 .pages {
   position: absolute;
   z-index: 2;
+  top: var(--topbar-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: var(--topbar-height) 0 0;
   overflow: hidden;
   touch-action: pan-y;
@@ -154,7 +177,12 @@ button {
 
 .page {
   position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   inset: 0;
+  padding: 20px 80px;
   padding: clamp(14px, 3svh, 26px) clamp(70px, 8vw, 96px);
   opacity: 0;
   transform: translateX(54px);
@@ -176,7 +204,9 @@ button {
   position: absolute;
   z-index: 12;
   top: 50%;
+  width: 58px;
   width: clamp(52px, 6vw, 64px);
+  height: 100px;
   height: clamp(88px, 28svh, 112px);
   border: 1px solid rgba(255, 255, 255, 0.13);
   display: grid;
@@ -207,6 +237,7 @@ button {
   position: absolute;
   z-index: 13;
   left: 50%;
+  bottom: 8px;
   bottom: clamp(4px, 1svh, 10px);
   display: flex;
   align-items: center;
@@ -215,6 +246,7 @@ button {
 }
 
 .pager.task-active {
+  bottom: calc(var(--bottom-height) + 14px);
   bottom: calc(var(--bottom-height) + clamp(10px, 2svh, 18px));
 }
 
@@ -265,6 +297,7 @@ button {
 }
 
 .home-center h1 {
+  margin: 0 0 20px;
   margin: 0 0 clamp(16px, 3svh, 24px);
   color: #ffe294;
   font-family: "CVTitle", "Microsoft YaHei UI", sans-serif;
@@ -274,7 +307,9 @@ button {
 }
 
 .primary-action {
+  width: 320px;
   width: clamp(280px, 39vw, 340px);
+  height: 80px;
   height: clamp(64px, 14svh, 96px);
   padding: 0 28px;
   border: 0;
@@ -354,16 +389,19 @@ button {
 .panel-page {
   height: 100%;
   display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
   grid-template-columns: clamp(170px, 22vw, 240px) minmax(0, 1fr);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(7, 11, 14, 0.58);
 }
 
 .page.has-task-dock {
+  padding-bottom: calc(var(--bottom-height) + 22px);
   padding-bottom: calc(var(--bottom-height) + clamp(16px, 3svh, 28px));
 }
 
 .panel-index {
+  padding: 24px;
   padding: clamp(18px, 3vw, 30px);
   border-right: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--cv-gold);
@@ -387,6 +425,7 @@ button {
 .panel-body {
   min-width: 0;
   min-height: 0;
+  padding: 24px;
   padding: clamp(16px, 3vw, 30px);
   overflow: auto;
   background: var(--cv-panel-soft);
@@ -399,6 +438,7 @@ button {
 }
 
 .settings-index {
+  padding: 24px 18px;
   padding: clamp(20px, 3vw, 28px) clamp(14px, 2.4vw, 22px);
   display: grid;
   align-content: start;
@@ -682,6 +722,7 @@ button {
 
 .article {
   height: 100%;
+  padding: 30px;
   padding: clamp(20px, 4vw, 38px);
   border: 1px solid rgba(255, 255, 255, 0.13);
   background: var(--cv-panel);
@@ -737,14 +778,20 @@ button {
 .global-download {
   position: absolute;
   z-index: 11;
+  top: auto;
+  right: 26px;
+  bottom: 17px;
+  left: 26px;
   inset: auto clamp(18px, 2.6vw, 34px) clamp(12px, 2.4svh, 22px);
   width: auto;
   height: var(--bottom-height);
+  padding: 11px 32px;
   padding: 11px clamp(24px, 3.3vw, 40px);
   border: 1px solid rgba(242, 204, 103, 0.42);
   border-radius: 8px;
   display: grid;
   grid-template-columns: minmax(230px, 320px) minmax(0, 1fr) 121px;
+  gap: 24px;
   gap: clamp(18px, 2.4vw, 31px);
   align-items: center;
   color: inherit;
