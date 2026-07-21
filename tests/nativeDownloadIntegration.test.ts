@@ -56,6 +56,18 @@ describe("native Android game download integration", () => {
     expect(appSource).toContain("refreshLauncherPermissionStatus");
   });
 
+  it("checks proxy and Github latency when Github is selected without blocking downloads", () => {
+    expect(nativeBridgeSource).toContain("getGithubNetworkStatus()");
+    expect(pluginSource).toContain("getGithubNetworkStatus(PluginCall call)");
+    expect(pluginSource).toContain("getDefaultProxy");
+    expect(pluginSource).toContain("https://github.com/");
+    expect(appSource).toContain("refreshGithubNetworkStatus");
+    expect(appSource).toContain('if (source === "github") void refreshGithubNetworkStatus()');
+    expect(appSource).toContain("githubNetworkWarning");
+    expect(appSource).toContain("github-network-warning");
+    expect(appSource).not.toContain("ensureGithubNetworkAvailable");
+  });
+
   it("reports transfer speed so the launcher can estimate remaining time", () => {
     expect(downloadServiceSource).toContain('state.put("bytesPerSecond"');
     expect(nativeBridgeSource).toContain("bytesPerSecond?: number");

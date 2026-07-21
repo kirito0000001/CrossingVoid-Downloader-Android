@@ -13,6 +13,12 @@ export type LauncherPermissionStatus = {
   batteryOptimizationIgnored: boolean;
 };
 
+export type NativeGithubNetworkStatus = {
+  proxyDetected: boolean;
+  reachable: boolean;
+  latencyMs: number | null;
+};
+
 export type NativeLauncherUpdateState = {
   status: "idle" | "downloading" | "ready" | "error";
   message: string;
@@ -75,6 +81,7 @@ type AndroidLauncherPlugin = {
   getLauncherLogInfo(): Promise<LauncherLogInfo>;
   uploadLauncherLog(options: { launcherVersion: string }): Promise<LauncherLogUploadResult>;
   checkGame(options: { packageName: string }): Promise<AndroidGameInfo>;
+  getGithubNetworkStatus(): Promise<NativeGithubNetworkStatus>;
   getLauncherPermissionStatus(): Promise<LauncherPermissionStatus>;
   openInstallPermissionSettings(): Promise<{ opened: boolean }>;
   openBatteryOptimizationSettings(): Promise<{ opened: boolean; directRequest: boolean }>;
@@ -132,6 +139,13 @@ export async function checkAndroidGame(): Promise<AndroidGameInfo> {
     };
   }
   return plugin.checkGame({ packageName: GAME_PACKAGE_NAME });
+}
+
+export async function getGithubNetworkStatus(): Promise<NativeGithubNetworkStatus> {
+  if (Capacitor.getPlatform() !== "android") {
+    return { proxyDetected: true, reachable: true, latencyMs: 120 };
+  }
+  return plugin.getGithubNetworkStatus();
 }
 
 export async function openInstallPermissionSettings() {

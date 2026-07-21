@@ -10,6 +10,10 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.ProxyInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.PowerManager;
@@ -30,6 +34,10 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
 import java.io.File;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
+import org.json.JSONObject;
 
 @CapacitorPlugin(
     name = "AndroidLauncher",
@@ -161,6 +169,53 @@ public class AndroidLauncherPlugin extends Plugin {
         result.put("versionCode", 0);
         result.put("installerOwnsGamePackage", getContext().getPackageName().equals(packageName));
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void getGithubNetworkStatus(PluginCall call) {
+        getBridge().execute(() -> {
+            JSObject result = new JSObject();
+            result.put("proxyDetected", hasNetworkProxyOrVpn());
+            long startedAt = System.nanoTime();
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL("https://github.com/").openConnection();
+                connection.setRequestMethod("HEAD");
+                connection.setConnectTimeout(7_000);
+                connection.setReadTimeout(7_000);
+                connection.setInstanceFollowRedirects(true);
+                connection.setRequestProperty("User-Agent", "CrossingVoidAndroidLauncher/NetworkCheck");
+                int status = connection.getResponseCode();
+                result.put("reachable", status >= 200 && status < 500);
+                result.put("latencyMs", elapsedMilliseconds(startedAt));
+            } catch (Exception error) {
+                result.put("reachable", false);
+                result.put("latencyMs", JSONObject.NULL);
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+            call.resolve(result);
+        });
+    }
+
+    private boolean hasNetworkProxyOrVpn() {
+        ConnectivityManager connectivity = (ConnectivityManager) getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivity != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                ProxyInfo proxy = connectivity.getDefaultProxy();
+                if (proxy != null && proxy.getHost() != null && !proxy.getHost().isBlank()) return true;
+            }
+            for (Network network : connectivity.getAllNetworks()) {
+                NetworkCapabilities capabilities = connectivity.getNetworkCapabilities(network);
+                if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return true;
+            }
+        }
+        String proxyHost = System.getProperty("http.proxyHost", "");
+        return !proxyHost.isBlank();
+    }
+
+    private long elapsedMilliseconds(long startedAt) {
+        return Math.max(0L, (System.nanoTime() - startedAt) / 1_000_000L);
     }
 
     @PluginMethod

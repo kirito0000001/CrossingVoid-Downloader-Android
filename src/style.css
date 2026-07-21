@@ -629,6 +629,44 @@ button {
   opacity: 0.72;
 }
 
+.github-network-status {
+  padding: 11px 13px;
+  border: 1px solid rgba(105, 181, 194, 0.35);
+  border-radius: 5px;
+  display: grid;
+  gap: 6px;
+  background: rgba(5, 22, 27, 0.5);
+}
+
+.github-network-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.github-network-header strong {
+  color: #99e4ef;
+  font-size: 14px;
+}
+
+.github-network-header span,
+.github-network-status small {
+  color: rgba(255, 255, 255, 0.67);
+  font-size: 11px;
+}
+
+.github-network-status.warning {
+  border-color: rgba(255, 121, 105, 0.52);
+  background: rgba(53, 14, 14, 0.48);
+}
+
+.github-network-status.warning .github-network-header strong,
+.github-network-status .github-network-warning {
+  color: #ffb9ad;
+}
+
 .account-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

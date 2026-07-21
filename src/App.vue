@@ -28,6 +28,7 @@ import {
   cancelGameDownload,
   checkAndroidGame,
   getAndroidLauncherInfo,
+  getGithubNetworkStatus,
   getGameDownloadState,
   getLauncherLogInfo,
   getLauncherPermissionStatus,
@@ -56,6 +57,7 @@ import {
   readAndroidDownloadSource,
   saveAndroidDownloadSource,
 } from "./services/downloadSource";
+import { githubNetworkWarning, type GithubNetworkStatus } from "./services/githubNetwork";
 import {
   checkLatestAndroidGame,
   type AndroidGameUpdateInfo,
@@ -114,6 +116,8 @@ const launcherUpdateCheckError = ref("");
 const launcherUpdateCheckCompleted = ref(false);
 const trafficQuota = ref<TrafficQuotaStatus | null>(null);
 const trafficQuotaPending = ref(false);
+const githubNetworkStatus = ref<GithubNetworkStatus | null>(null);
+const githubNetworkPending = ref(false);
 const operationErrorMessage = ref("");
 const launcherLogInfo = ref<LauncherLogInfo | null>(null);
 const launcherLogUploadState = ref<"idle" | "uploading" | "success" | "error">("idle");
@@ -196,6 +200,20 @@ const trafficQuotaHint = computed(() =>
     ? "服务器当前流量不足，请更换下载源。"
     : "可以在启动器主界面顶部支持一下作者，谢谢了。",
 );
+const githubNetworkWarningText = computed(() =>
+  githubNetworkStatus.value ? githubNetworkWarning(githubNetworkStatus.value) : "",
+);
+const githubProxyText = computed(() => {
+  if (githubNetworkPending.value) return "正在检测";
+  if (!githubNetworkStatus.value) return "等待检测";
+  return githubNetworkStatus.value.proxyDetected ? "已检测到网络代理" : "未检测到网络代理";
+});
+const githubLatencyText = computed(() => {
+  if (githubNetworkPending.value) return "正在检测";
+  if (!githubNetworkStatus.value) return "等待检测";
+  if (!githubNetworkStatus.value.reachable || githubNetworkStatus.value.latencyMs === null) return "无法连接";
+  return `${githubNetworkStatus.value.latencyMs} ms`;
+});
 const launcherLogStatusText = computed(() => {
   if (launcherLogUploadState.value === "uploading") return "正在上传启动器日志";
   if (launcherLogUploadMessage.value) return launcherLogUploadMessage.value;
@@ -640,6 +658,26 @@ async function refreshTrafficQuota() {
   }
 }
 
+async function refreshGithubNetworkStatus() {
+  if (githubNetworkPending.value) return;
+  githubNetworkPending.value = true;
+  try {
+    githubNetworkStatus.value = await getGithubNetworkStatus();
+    const warning = githubNetworkWarning(githubNetworkStatus.value);
+    void writeLauncherLog(
+      warning ? "warning" : "info",
+      "github.network-check",
+      warning || "Github 网络连接正常",
+      githubNetworkStatus.value,
+    );
+  } catch (error) {
+    githubNetworkStatus.value = { proxyDetected: false, reachable: false, latencyMs: null };
+    void writeLauncherLog("warning", "github.network-check", "Github 网络检测失败", error);
+  } finally {
+    githubNetworkPending.value = false;
+  }
+}
+
 function ensureOfficialTrafficAvailable() {
   if (downloadSource.value !== "official" || !officialTrafficBlocked.value) return true;
   operationErrorMessage.value = "服务器当前流量不足，请更换下载源。";
@@ -820,6 +858,7 @@ watch(downloadSource, (source) => {
   saveAndroidDownloadSource(source);
   void writeLauncherLog("info", "settings.download-source", source);
   if (source === "official") void refreshTrafficQuota();
+  if (source === "github") void refreshGithubNetworkStatus();
 });
 watch(phase, (value, previous) => {
   void writeLauncherLog(value === "error" ? "error" : "info", "launcher.phase", `${previous} -> ${value}`, {
@@ -882,7 +921,12 @@ onMounted(async () => {
   progressListener = await addDownloadProgressListener(applyNativeState);
   launcherProgressListener = await addLauncherUpdateProgressListener(applyLauncherUpdateState);
   document.addEventListener("visibilitychange", handleVisibilityChange);
-  await Promise.all([refreshAllStatus(), refreshTrafficQuota(), refreshLauncherPermissionStatus()]);
+  await Promise.all([
+    refreshAllStatus(),
+    refreshTrafficQuota(),
+    refreshLauncherPermissionStatus(),
+    ...(downloadSource.value === "github" ? [refreshGithubNetworkStatus()] : []),
+  ]);
   trafficQuotaRefreshTimer = window.setInterval(() => void refreshTrafficQuota(), 5 * 60 * 1000);
   await writeLauncherLog("info", "app.ready", "Launcher status initialized", {
     launcherVersion: launcherVersionText.value,
@@ -957,6 +1001,16 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="trafficQuota?.available" class="traffic-quota-track" aria-hidden="true"><span :style="{ width: `${trafficQuotaPercent}%` }"></span></div>
                 <small>{{ officialTrafficBlocked ? trafficQuotaHint : trafficQuotaExpiryText || trafficQuotaHint }}</small>
+              </section>
+
+              <section v-else class="github-network-status" :class="{ warning: Boolean(githubNetworkWarningText) }">
+                <div class="github-network-header">
+                  <strong>Github 网络检测</strong>
+                  <span>延迟 {{ githubLatencyText }}</span>
+                </div>
+                <small>代理：{{ githubProxyText }}</small>
+                <small v-if="githubNetworkWarningText" class="github-network-warning">{{ githubNetworkWarningText }}</small>
+                <small v-else>仅用于提示，不影响游戏下载。</small>
               </section>
 
               <section class="setting-row" data-settings-section="game">
