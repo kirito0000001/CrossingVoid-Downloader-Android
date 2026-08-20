@@ -38,6 +38,21 @@ describe("native Android game download integration", () => {
     expect(nativeBridgeSource).toContain('addListener("downloadProgress"');
   });
 
+  it("uses explicit transition states so resume and cancel cannot race the old worker", () => {
+    expect(downloadServiceSource).toContain('"pausing"');
+    expect(downloadServiceSource).toContain('"cancelling"');
+    expect(downloadServiceSource).toContain("compareAndSet(false, true)");
+    expect(downloadServiceSource).toContain("finishWorker");
+    expect(appSource).toContain("waitForNativeDownloadStatus");
+  });
+
+  it("imports one selected folder recursively and accepts only canonical chunk names", () => {
+    expect(pluginSource).toContain("Intent.ACTION_OPEN_DOCUMENT_TREE");
+    expect(downloadServiceSource).toContain("DocumentFile.fromTreeUri");
+    expect(downloadServiceSource).toContain("CrossingVoid手机端.碎片");
+    expect(downloadServiceSource).not.toContain("EXTRA_IMPORT_URIS");
+  });
+
   it("redelivers active foreground tasks after Android reclaims the process", () => {
     expect(downloadServiceSource).toContain("return START_REDELIVER_INTENT;");
     expect(launcherUpdateServiceSource).toContain("return START_REDELIVER_INTENT;");

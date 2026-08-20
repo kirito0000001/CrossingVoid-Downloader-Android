@@ -57,7 +57,7 @@ export type LauncherLogUploadResult = {
 };
 
 export type NativeDownloadState = {
-  status: "idle" | "downloading" | "paused" | "verifying" | "merging" | "extracting" | "ready" | "error";
+  status: "idle" | "downloading" | "pausing" | "paused" | "cancelling" | "importing" | "verifying" | "merging" | "extracting" | "ready" | "error";
   message: string;
   version?: string;
   source?: "official" | "github";
@@ -86,6 +86,7 @@ type AndroidLauncherPlugin = {
   openInstallPermissionSettings(): Promise<{ opened: boolean }>;
   openBatteryOptimizationSettings(): Promise<{ opened: boolean; directRequest: boolean }>;
   installDownloadedApk(): Promise<{ started: boolean }>;
+  importGameChunks(options: { plan: AndroidDownloadPlan }): Promise<{ started: boolean }>;
   startDownload(options: { plan: AndroidDownloadPlan }): Promise<{ started: boolean }>;
   pauseDownload(): Promise<{ paused: boolean }>;
   cancelDownload(): Promise<{ cancelled: boolean }>;
@@ -175,6 +176,11 @@ export async function installDownloadedApk() {
 export async function startGameDownload(plan: AndroidDownloadPlan) {
   if (Capacitor.getPlatform() !== "android") throw new Error("真实下载需要在 Android 启动器中运行");
   return plugin.startDownload({ plan });
+}
+
+export async function importGameChunks(plan: AndroidDownloadPlan) {
+  if (Capacitor.getPlatform() !== "android") throw new Error("导入游戏碎片需要在 Android 启动器中运行");
+  return plugin.importGameChunks({ plan });
 }
 
 export async function pauseGameDownload() {

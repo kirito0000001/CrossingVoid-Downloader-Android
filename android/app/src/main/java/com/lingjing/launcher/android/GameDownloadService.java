@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.content.pm.PackageInfo;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
@@ -17,6 +18,7 @@ import android.os.StatFs;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
+import androidx.documentfile.provider.DocumentFile;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -52,9 +54,11 @@ public class GameDownloadService extends Service {
     public static final String ACTION_START = "com.lingjing.launcher.android.action.START_DOWNLOAD";
     public static final String ACTION_PAUSE = "com.lingjing.launcher.android.action.PAUSE_DOWNLOAD";
     public static final String ACTION_CANCEL = "com.lingjing.launcher.android.action.CANCEL_DOWNLOAD";
+    public static final String ACTION_IMPORT = "com.lingjing.launcher.android.action.IMPORT_CHUNKS";
     public static final String ACTION_STATE = "com.lingjing.launcher.android.action.DOWNLOAD_STATE";
     public static final String EXTRA_PLAN = "downloadPlan";
     public static final String EXTRA_STATE = "downloadState";
+    public static final String EXTRA_IMPORT_TREE_URI = "importTreeUri";
 
     private static final String UPDATE_API = "https://www.crossingvoid.top/api/toolbox-updates/sign-download";
     private static final String PREFS_NAME = "crossingvoid_download";
@@ -92,16 +96,38 @@ public class GameDownloadService extends Service {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_PAUSE.equals(action)) {
             PAUSE_REQUESTED.set(true);
+            publishTransitionState("pausing", "正在暂停下载");
             return START_NOT_STICKY;
         }
         if (ACTION_CANCEL.equals(action)) {
             CANCEL_REQUESTED.set(true);
             PAUSE_REQUESTED.set(false);
+            publishTransitionState("cancelling", "正在取消并清理下载文件");
             if (!RUNNING.get()) {
                 clearAllDownloads(this);
                 saveAndBroadcastState(idleState());
                 stopSelf();
             }
+            return START_NOT_STICKY;
+        }
+
+        if (ACTION_IMPORT.equals(action)) {
+            String importPlan = intent == null ? null : intent.getStringExtra(EXTRA_PLAN);
+            String importTreeUri = intent == null ? null : intent.getStringExtra(EXTRA_IMPORT_TREE_URI);
+            if (importPlan == null || importPlan.isBlank() || importTreeUri == null || importTreeUri.isBlank()) {
+                saveAndBroadcastState(errorState("缺少要导入的游戏碎片或下载清单。"));
+                stopSelf();
+                return START_NOT_STICKY;
+            }
+            if (!RUNNING.compareAndSet(false, true)) {
+                saveAndBroadcastState(errorState("上一项游戏下载任务正在结束，请稍后再导入碎片。"));
+                return START_NOT_STICKY;
+            }
+            PAUSE_REQUESTED.set(false);
+            CANCEL_REQUESTED.set(false);
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_PLAN, importPlan).apply();
+            startForegroundCompat(buildNotification(0, false));
+            executor.execute(() -> runImport(importPlan, Uri.parse(importTreeUri), startId));
             return START_NOT_STICKY;
         }
 
@@ -115,14 +141,15 @@ public class GameDownloadService extends Service {
             return START_NOT_STICKY;
         }
 
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_PLAN, planJson).apply();
+        if (!RUNNING.compareAndSet(false, true)) {
+            return START_REDELIVER_INTENT;
+        }
         PAUSE_REQUESTED.set(false);
         CANCEL_REQUESTED.set(false);
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_PLAN, planJson).apply();
         startForegroundCompat(buildNotification(0, false));
-        if (RUNNING.compareAndSet(false, true)) {
-            String finalPlanJson = planJson;
-            executor.execute(() -> runDownload(finalPlanJson));
-        }
+        String finalPlanJson = planJson;
+        executor.execute(() -> runDownload(finalPlanJson, startId));
         return START_REDELIVER_INTENT;
     }
 
@@ -138,8 +165,12 @@ public class GameDownloadService extends Service {
         super.onDestroy();
     }
 
-    private void runDownload(String planJson) {
+    private void runDownload(String planJson, int startId) {
         PowerManager.WakeLock wakeLock = null;
+        String terminalStatus = null;
+        String terminalMessage = null;
+        PreparedFiles terminalPrepared = null;
+        boolean cancelled = false;
         try {
             PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CrossingVoidLauncher:GameDownload");
@@ -171,29 +202,195 @@ public class GameDownloadService extends Service {
             checkControlSignals();
             verifyArchive(activePlan, archiveFile);
             checkControlSignals();
-            PreparedFiles prepared = extractPackage(activePlan, archiveFile, downloadsRoot);
+            terminalPrepared = extractPackage(activePlan, archiveFile, downloadsRoot);
             deleteRecursively(workDir);
-            publishState("ready", "APK 和 OBB 已准备完成", activePlan.totalBytes, 100.0, activePlan.chunks.size(), true, prepared);
-            showCompletionNotification();
+            terminalStatus = "ready";
+            terminalMessage = "APK 和 OBB 已准备完成";
         } catch (PausedException ignored) {
-            publishState("paused", "下载已暂停，稍后可以继续", downloadedBytes(), currentPercent(), currentChunkIndex(), true, null);
-            showPausedNotification();
+            terminalStatus = "paused";
+            terminalMessage = "下载已暂停，稍后可以继续";
         } catch (CancelledException ignored) {
-            clearAllDownloads(this);
-            saveAndBroadcastState(idleState());
-            NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID);
+            cancelled = true;
         } catch (Exception error) {
-            String message = error.getMessage() == null || error.getMessage().isBlank() ? error.getClass().getSimpleName() : error.getMessage();
-            publishState("error", message, downloadedBytes(), currentPercent(), currentChunkIndex(), true, null);
-            showErrorNotification(message);
+            terminalStatus = "error";
+            terminalMessage = error.getMessage() == null || error.getMessage().isBlank() ? error.getClass().getSimpleName() : error.getMessage();
         } finally {
-            RUNNING.set(false);
             if (wakeLock != null && wakeLock.isHeld()) {
                 wakeLock.release();
             }
+            finishWorker(terminalStatus, terminalMessage, terminalPrepared, cancelled);
+            RUNNING.set(false);
             stopForeground(false);
-            stopSelf();
+            stopSelfResult(startId);
         }
+    }
+
+    private void runImport(String planJson, Uri treeUri, int startId) {
+        String terminalStatus = null;
+        String terminalMessage = null;
+        PreparedFiles terminalPrepared = null;
+        boolean cancelled = false;
+        try {
+            activePlan = Plan.parse(planJson);
+            File downloadsRoot = getDownloadsRoot(this);
+            File workDir = new File(downloadsRoot, "work-" + activePlan.archiveSha256.substring(0, 12));
+            File chunksDir = new File(workDir, "chunks");
+            ensureDirectory(chunksDir);
+            prepareForPlan(downloadsRoot, workDir, activePlan);
+            DocumentFile root = DocumentFile.fromTreeUri(this, treeUri);
+            if (root == null || !root.isDirectory()) throw new IOException("无法读取选择的游戏碎片文件夹。");
+            List<DocumentFile> sourceFiles = new ArrayList<>();
+            collectChunkDocuments(root, sourceFiles);
+            if (sourceFiles.isEmpty()) throw new IOException("所选文件夹及其子文件夹中没有当前版本的游戏碎片。");
+            int imported = 0;
+            for (DocumentFile sourceFile : sourceFiles) {
+                checkControlSignals();
+                String name = sourceFile.getName();
+                Chunk chunk = findChunkByName(name);
+                if (chunk == null) continue;
+                File destination = new File(chunksDir, chunk.fileName);
+                if (destination.length() == chunk.sizeBytes && hashMatches(destination, chunk.sha256)) {
+                    continue;
+                }
+                deleteFile(destination);
+                copyAndVerifyImportedChunk(sourceFile, chunk, destination, chunksDir);
+                imported++;
+            }
+            verifiedChunks = verifiedChunkCount(activePlan, chunksDir);
+            if (verifiedChunks == activePlan.chunks.size()) {
+                File archiveFile = new File(workDir, activePlan.archiveFileName);
+                mergeChunks(activePlan, chunksDir, archiveFile);
+                verifyArchive(activePlan, archiveFile);
+                terminalPrepared = extractPackage(activePlan, archiveFile, downloadsRoot);
+                deleteRecursively(workDir);
+                terminalStatus = "ready";
+                terminalMessage = "游戏碎片校验完成，APK 和 OBB 已准备完成";
+            } else {
+                terminalStatus = "paused";
+                terminalMessage = "已导入 " + imported + " 个碎片，已准备 " + verifiedChunks + " / " + activePlan.chunks.size() + " 片";
+            }
+        } catch (PausedException ignored) {
+            terminalStatus = "paused";
+            terminalMessage = "导入已暂停，已校验的碎片会保留";
+        } catch (CancelledException ignored) {
+            cancelled = true;
+        } catch (Exception error) {
+            terminalStatus = "error";
+            terminalMessage = error.getMessage() == null || error.getMessage().isBlank() ? "导入游戏碎片失败" : error.getMessage();
+        } finally {
+            finishWorker(terminalStatus, terminalMessage, terminalPrepared, cancelled);
+            RUNNING.set(false);
+            stopForeground(false);
+            stopSelfResult(startId);
+        }
+    }
+
+    private void finishWorker(String status, String message, PreparedFiles prepared, boolean cancelled) {
+        PAUSE_REQUESTED.set(false);
+        CANCEL_REQUESTED.set(false);
+        if (cancelled) {
+            clearAllDownloads(this);
+            saveAndBroadcastState(idleState());
+            NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID);
+            return;
+        }
+        String terminalStatus = status == null ? "error" : status;
+        String terminalMessage = message == null || message.isBlank() ? "游戏下载任务意外结束" : message;
+        if (terminalStatus.equals("idle")) {
+            saveAndBroadcastState(idleState());
+            return;
+        }
+        long bytes = terminalStatus.equals("ready") && activePlan != null ? activePlan.totalBytes : downloadedBytes();
+        double percent = terminalStatus.equals("ready") ? 100.0 : currentPercent();
+        int chunk = terminalStatus.equals("ready") && activePlan != null ? activePlan.chunks.size() : currentChunkIndex();
+        publishState(terminalStatus, terminalMessage, bytes, percent, chunk, true, prepared);
+        if (terminalStatus.equals("ready")) showCompletionNotification();
+        else if (terminalStatus.equals("paused")) showPausedNotification();
+        else if (terminalStatus.equals("error")) showErrorNotification(terminalMessage);
+    }
+
+    private void publishTransitionState(String status, String message) {
+        if (!RUNNING.get()) return;
+        JSONObject state = readStateObject(this);
+        try {
+            state.put("status", status);
+            state.put("message", message);
+            state.put("canPause", false);
+            state.put("updatedAt", System.currentTimeMillis());
+        } catch (JSONException error) {
+            return;
+        }
+        saveAndBroadcastState(state);
+    }
+
+    private void collectChunkDocuments(DocumentFile directory, List<DocumentFile> result) {
+        for (DocumentFile child : directory.listFiles()) {
+            if (child.isDirectory()) {
+                collectChunkDocuments(child, result);
+            } else if (child.isFile() && findChunkByName(child.getName()) != null) {
+                result.add(child);
+            }
+        }
+    }
+
+    private Chunk findChunkByName(String name) {
+        if (name == null || !name.matches("^CrossingVoid手机端\\.碎片\\d{3}$")) return null;
+        for (Chunk chunk : activePlan.chunks) {
+            if (chunk.fileName.equals(name)) return chunk;
+        }
+        return null;
+    }
+
+    private void copyAndVerifyImportedChunk(DocumentFile source, Chunk chunk, File destination, File chunksDir) throws Exception {
+        File temporary = new File(destination.getParentFile(), destination.getName() + ".importing");
+        deleteFile(temporary);
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException error) {
+            throw new IllegalStateException("SHA-256 is unavailable", error);
+        }
+        long copied = 0L;
+        long existing = existingChunkBytes(activePlan, chunksDir);
+        try (InputStream sourceInput = getContentResolver().openInputStream(source.getUri());
+             InputStream bufferedInput = sourceInput == null ? null : new BufferedInputStream(sourceInput, BUFFER_SIZE);
+             OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), BUFFER_SIZE)) {
+            if (bufferedInput == null) throw new IOException("无法读取导入的碎片：" + chunk.fileName);
+            byte[] buffer = new byte[BUFFER_SIZE];
+            int read;
+            while ((read = bufferedInput.read(buffer)) >= 0) {
+                checkControlSignals();
+                if (read <= 0) continue;
+                output.write(buffer, 0, read);
+                digest.update(buffer, 0, read);
+                copied += read;
+                long processed = Math.min(activePlan.totalBytes, existing + copied);
+                publishState("importing", "正在导入并校验第 " + chunk.index + " / " + chunk.count + " 片", processed,
+                    processed / (double) activePlan.totalBytes * 85.0, chunk.index, true, null);
+            }
+        }
+        String actualHash = toHex(digest.digest());
+        if (copied != chunk.sizeBytes || !actualHash.equalsIgnoreCase(chunk.sha256)) {
+            deleteFile(temporary);
+            throw new IOException("导入碎片校验失败：" + chunk.fileName);
+        }
+        deleteFile(destination);
+        if (!temporary.renameTo(destination)) throw new IOException("无法保存导入碎片：" + destination.getName());
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder result = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        return result.toString();
+    }
+
+    private int verifiedChunkCount(Plan plan, File chunksDir) throws IOException {
+        int count = 0;
+        for (Chunk chunk : plan.chunks) {
+            File file = new File(chunksDir, chunk.fileName);
+            if (file.length() == chunk.sizeBytes && hashMatches(file, chunk.sha256)) count++;
+        }
+        return count;
     }
 
     private void downloadChunks(Plan plan, File chunksDir) throws Exception {
@@ -924,6 +1121,11 @@ public class GameDownloadService extends Service {
             sha256 = source.getString("sha256");
             sizeBytes = source.getLong("sizeBytes");
             downloadUrl = source.optString("downloadUrl", "");
+            String expectedName = String.format(Locale.ROOT, "CrossingVoid手机端.碎片%03d", index);
+            if (index <= 0 || count <= 0 || !fileName.equals(expectedName) || objectKey.isBlank()
+                || !sha256.matches("^[a-fA-F0-9]{64}$") || sizeBytes <= 0) {
+                throw new JSONException("Android 游戏分片清单无效：" + expectedName);
+            }
         }
     }
 
@@ -940,7 +1142,7 @@ public class GameDownloadService extends Service {
         private Plan(JSONObject source) throws JSONException {
             productKey = source.getString("productKey");
             runtime = source.getString("runtime");
-            this.source = source.optString("source", "official");
+            this.source = source.getString("source");
             version = source.getString("version");
             archiveFileName = source.getString("archiveFileName");
             archiveSha256 = source.getString("archiveSha256").toLowerCase(Locale.ROOT);
@@ -951,7 +1153,16 @@ public class GameDownloadService extends Service {
                 chunks.add(new Chunk(items.getJSONObject(index)));
             }
             chunks.sort(Comparator.comparingInt(chunk -> chunk.index));
-            if ((!this.source.equals("official") && !this.source.equals("github")) || chunks.isEmpty() || totalBytes <= 0 || archiveSha256.length() != 64) {
+            long chunkBytes = 0L;
+            for (int position = 0; position < chunks.size(); position++) {
+                Chunk chunk = chunks.get(position);
+                if (chunk.index != position + 1 || chunk.count != chunks.size()) throw new JSONException("Android 游戏分片序号不连续");
+                if (this.source.equals("github") && chunk.downloadUrl.isBlank()) throw new JSONException("Github 游戏分片缺少下载地址");
+                chunkBytes = Math.addExact(chunkBytes, chunk.sizeBytes);
+            }
+            if (!productKey.equals("crossingvoid-android-game") || !runtime.equals("Android")
+                || (!this.source.equals("official") && !this.source.equals("github")) || chunks.isEmpty()
+                || totalBytes <= 0 || chunkBytes != totalBytes || !archiveSha256.matches("^[a-f0-9]{64}$")) {
                 throw new JSONException("下载清单不完整");
             }
         }

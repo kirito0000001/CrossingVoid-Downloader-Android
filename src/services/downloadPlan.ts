@@ -37,9 +37,8 @@ function requireSha256(value: string | undefined, label: string) {
   return normalized;
 }
 
-function githubChunkUrl(version: string, fileName: string) {
-  const tag = `Android-${version}`;
-  return `https://github.com/kirito0000001/CrossingVoid/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(fileName)}`;
+function githubChunkUrl(releaseTag: string, fileName: string) {
+  return `https://github.com/kirito0000001/CrossingVoid/releases/download/${encodeURIComponent(releaseTag)}/${encodeURIComponent(fileName)}`;
 }
 
 export function buildAndroidDownloadPlan(
@@ -63,7 +62,7 @@ export function buildAndroidDownloadPlan(
       objectKey: chunk.objectKey,
       sha256: requireSha256(chunk.sha256, `Android 第 ${expectedIndex} 个分片`),
       sizeBytes: chunk.sizeBytes!,
-      ...(source === "github" ? { downloadUrl: githubChunkUrl(update.version, chunk.fileName) } : {}),
+      ...(source === "github" ? { downloadUrl: githubChunkUrl(update.downloadReleaseTag, chunk.githubFileName) } : {}),
     };
   });
 
@@ -86,8 +85,9 @@ export function buildAndroidDownloadPlan(
 
 export function launcherPhaseFromNativeState(status: string): LauncherDownloadPhase {
   if (status === "downloading") return "downloading";
+  if (status === "pausing" || status === "cancelling") return "verifying";
   if (status === "paused") return "paused";
-  if (["verifying", "merging", "extracting"].includes(status)) return "verifying";
+  if (["importing", "verifying", "merging", "extracting"].includes(status)) return "verifying";
   if (status === "ready") return "readyInstall";
   if (status === "error") return "error";
   return "updateReady";

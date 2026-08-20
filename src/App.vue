@@ -34,6 +34,7 @@ import {
   getLauncherPermissionStatus,
   getLauncherUpdateState,
   installDownloadedApk,
+  importGameChunks,
   installLauncherUpdate,
   openInstallPermissionSettings,
   openBatteryOptimizationSettings,
@@ -114,6 +115,11 @@ const verifiedChunks = ref(0);
 const currentPageIndex = ref(1);
 const launcherUpdateCheckError = ref("");
 const launcherUpdateCheckCompleted = ref(false);
+const launcherAccessLocked = computed(() =>
+  !launcherUpdateCheckCompleted.value ||
+  Boolean(launcherUpdateCheckError.value) ||
+  ["launcherChecking", "launcherUpdateReady", "launcherUpdating", "launcherUpdateInstall", "launcherInstalling"].includes(phase.value),
+);
 const trafficQuota = ref<TrafficQuotaStatus | null>(null);
 const trafficQuotaPending = ref(false);
 const githubNetworkStatus = ref<GithubNetworkStatus | null>(null);
@@ -338,8 +344,11 @@ const statusTitle = computed(() => {
     case "downloading":
       return `下载游戏中：${activeDownloadSourceName.value}`;
     case "paused":
-      return "已暂停下载";
+      return `下载已暂停：${activeDownloadSourceName.value}`;
     case "verifying":
+      if (nativeDownloadStatus.value === "pausing") return "正在暂停下载";
+      if (nativeDownloadStatus.value === "cancelling") return "正在取消下载";
+      if (nativeDownloadStatus.value === "importing") return "导入游戏碎片";
       if (nativeDownloadStatus.value === "merging") return "合并安装包";
       if (nativeDownloadStatus.value === "extracting") return "解压游戏资源";
       return "校验游戏包";
@@ -444,6 +453,20 @@ const actionDisabled = computed(() =>
   ["launcherChecking", "launcherUpdating", "launcherInstalling", "checking", "verifying", "installing"].includes(phase.value),
 );
 
+async function waitForNativeDownloadStatus(
+  accepted: NativeDownloadState["status"][],
+  timeoutMs = 15_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const state = await getGameDownloadState();
+    applyNativeState(state);
+    if (accepted.includes(state.status)) return state;
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+  }
+  throw new Error("游戏下载任务仍在结束，请稍后再试。");
+}
+
 const gameManagementAction = computed<GameManagementAction | null>(() => {
   if (isLauncherUpdatePhase.value || ["checking", "installing"].includes(phase.value)) return null;
   if (["downloading", "paused", "verifying"].includes(phase.value)) return "cancelDownload";
@@ -503,6 +526,7 @@ function formatEtaClock(value: number) {
 }
 
 function applyNativeState(state: NativeDownloadState) {
+  const preserveLauncherUpdatePhase = isLauncherUpdatePhase.value;
   nativeDownloadStatus.value = state.status;
   if (state.status === "idle") {
     activeDownloadSource.value = null;
@@ -517,9 +541,11 @@ function applyNativeState(state: NativeDownloadState) {
   downloadedBytes.value = Math.max(0, state.downloadedBytes || 0);
   totalBytes.value = Math.max(state.totalBytes || 0, totalBytes.value);
   downloadSpeedBytes.value = Math.max(0, state.bytesPerSecond || 0);
-  progress.value = Math.max(0, Math.min(100, state.percent || 0));
-  statusMessage.value = state.message || "正在处理游戏下载";
-  phase.value = launcherPhaseFromNativeState(state.status);
+  if (!preserveLauncherUpdatePhase) {
+    progress.value = Math.max(0, Math.min(100, state.percent || 0));
+    statusMessage.value = state.message || "正在处理游戏下载";
+    phase.value = launcherPhaseFromNativeState(state.status);
+  }
   const logSignature = [state.status, state.currentChunk, state.verifiedChunks, state.message].join("|");
   if (logSignature !== lastNativeLogSignature) {
     lastNativeLogSignature = logSignature;
@@ -566,6 +592,7 @@ async function checkLauncherUpdate(): Promise<boolean> {
   phase.value = "launcherChecking";
   launcherUpdateCheckError.value = "";
   launcherUpdateCheckCompleted.value = false;
+  launcherUpdateInfo.value = null;
   progress.value = 0;
   downloadedBytes.value = 0;
   totalBytes.value = 0;
@@ -583,11 +610,11 @@ async function checkLauncherUpdate(): Promise<boolean> {
     }
 
     const latest = await checkLatestAndroidLauncher();
-    launcherUpdateInfo.value = latest;
     launcherTargetVersionName.value = latest?.versionName || "";
     launcherUpdateCheckCompleted.value = true;
     if (!latest || !shouldInstallLauncherUpdate(installedLauncher.versionCode, installedLauncher.versionName, latest)) return false;
 
+    launcherUpdateInfo.value = latest;
     phase.value = "launcherUpdateReady";
     currentPageIndex.value = 1;
     progress.value = 0;
@@ -599,12 +626,15 @@ async function checkLauncherUpdate(): Promise<boolean> {
     launcherUpdateInfo.value = null;
     launcherUpdateCheckCompleted.value = true;
     launcherUpdateCheckError.value = `启动器更新检查失败：${error instanceof Error ? error.message : "未知错误"}`;
+    phase.value = "error";
+    statusMessage.value = launcherUpdateCheckError.value;
     return false;
   }
 }
 
 async function refreshGameStatus() {
   phase.value = "checking";
+  operationErrorMessage.value = "";
   progress.value = 0;
   statusMessage.value = "正在读取本机已安装游戏";
   try {
@@ -634,13 +664,15 @@ async function refreshGameStatus() {
     statusMessage.value = `等待安装游戏，目标 ${latestUpdate.version}`;
   } catch (error) {
     phase.value = "error";
-    statusMessage.value = error instanceof Error ? error.message : "检测失败";
+    const reason = error instanceof Error ? error.message : "检测失败";
+    statusMessage.value = `无法读取游戏版本信息：${reason}`;
+    operationErrorMessage.value = statusMessage.value;
     reportFailure("refresh-game-status", error);
   }
 }
 
 async function refreshAllStatus() {
-  if (await checkLauncherUpdate()) return;
+  if (await checkLauncherUpdate() || launcherUpdateCheckError.value) return;
   await refreshGameStatus();
 }
 
@@ -761,6 +793,10 @@ function handleTouchEnd(event: TouchEvent) {
 }
 
 async function handlePrimaryAction() {
+  if (launcherAccessLocked.value && !["launcherUpdateReady", "launcherUpdateInstall"].includes(phase.value)) {
+    if (launcherUpdateCheckError.value) await refreshAllStatus();
+    return;
+  }
   if (phase.value === "launcherUpdateReady") {
     await beginLauncherUpdate();
     return;
@@ -783,6 +819,7 @@ async function handlePrimaryAction() {
   if (phase.value === "downloading") {
     statusMessage.value = "正在暂停下载";
     await pauseGameDownload();
+    await waitForNativeDownloadStatus(["paused", "idle", "error"]);
     return;
   }
   if (phase.value === "readyInstall") {
@@ -827,7 +864,21 @@ async function beginLauncherUpdate() {
   }
 }
 
+async function ensureLatestLauncherForNetworkDownload() {
+  const previousPhase = phase.value;
+  const updateRequired = await checkLauncherUpdate();
+  if (!updateRequired && !launcherUpdateCheckError.value && launcherUpdateCheckCompleted.value) {
+    phase.value = previousPhase;
+    return true;
+  }
+  statusMessage.value = launcherUpdateCheckError.value
+    ? "无法确认启动器是否为最新版本，已停止游戏下载"
+    : "必须先更新到最新启动器才能下载游戏";
+  return false;
+}
+
 async function beginRealDownload() {
+  if (!(await ensureLatestLauncherForNetworkDownload())) return;
   if (!updateInfo.value) {
     await refreshGameStatus();
     return;
@@ -851,6 +902,31 @@ async function beginRealDownload() {
     phase.value = "error";
     statusMessage.value = error instanceof Error ? error.message : "无法开始下载";
     reportFailure("start-download", error);
+  }
+}
+
+async function importGameChunksFromDevice() {
+  if (["installing", "readyInstall"].includes(phase.value)) return;
+  try {
+    if (["downloading", "paused", "verifying"].includes(phase.value)) {
+      if (!window.confirm("导入碎片会取消当前下载，并清理已经下载一半的缓存。是否继续？")) return;
+      statusMessage.value = "正在停止当前下载并清理缓存";
+      await cancelGameDownload();
+      await waitForNativeDownloadStatus(["idle"]);
+    }
+    const currentUpdate = updateInfo.value ?? await checkLatestAndroidGame();
+    updateInfo.value = currentUpdate;
+    const plan = buildAndroidDownloadPlan(currentUpdate, downloadSource.value);
+    activeDownloadSource.value = downloadSource.value;
+    totalBytes.value = plan.totalBytes;
+    totalChunks.value = plan.chunks.length;
+    phase.value = "checking";
+    statusMessage.value = "请选择包含全部游戏碎片的文件夹";
+    await importGameChunks(plan);
+  } catch (error) {
+    phase.value = "error";
+    statusMessage.value = error instanceof Error ? error.message : "无法导入游戏碎片";
+    reportFailure("import-game-chunks", error);
   }
 }
 
@@ -889,8 +965,8 @@ async function handleGameManagementAction() {
   statusMessage.value = action === "cancelDownload" ? "正在取消并清理下载文件" : "正在删除下载文件";
   try {
     await cancelGameDownload();
+    await waitForNativeDownloadStatus(["idle"]);
     activeDownloadSource.value = null;
-    nativeDownloadStatus.value = "idle";
   } catch (error) {
     phase.value = "error";
     statusMessage.value = error instanceof Error ? error.message : "无法清理下载文件";
@@ -1015,9 +1091,12 @@ onBeforeUnmount(() => {
 
               <section class="setting-row" data-settings-section="game">
                 <div class="setting-copy"><strong>游戏管理</strong><span>{{ gameManagementHint }}</span></div>
-                <button v-if="gameManagementAction" class="danger-action" type="button" @click="handleGameManagementAction">
-                  <component :is="gameManagementIcon" :size="22" />{{ gameManagementButtonText }}
-                </button>
+                <div class="setting-actions">
+                  <button type="button" :disabled="['installing', 'readyInstall'].includes(phase)" @click="importGameChunksFromDevice"><HardDriveDownload :size="22" />导入游戏碎片</button>
+                  <button v-if="gameManagementAction" class="danger-action" type="button" @click="handleGameManagementAction">
+                    <component :is="gameManagementIcon" :size="22" />{{ gameManagementButtonText }}
+                  </button>
+                </div>
               </section>
 
               <section class="setting-row">
@@ -1058,12 +1137,12 @@ onBeforeUnmount(() => {
           <div class="home-center">
             <p class="world-label">Crossing Void · illusion Dreamland</p>
             <h1>零境交错：空界幻境</h1>
+            <p v-if="launcherUpdateCheckError || operationErrorMessage || phase === 'error'" class="update-warning"><CircleAlert :size="18" />{{ launcherUpdateCheckError || operationErrorMessage || statusMessage }}</p>
             <button class="primary-action" type="button" :disabled="actionDisabled" @click="handlePrimaryAction">
               <component :is="actionIcon" :size="48" :class="{ spinning: primaryActionSpinning }" />
               <span>{{ actionText }}</span>
             </button>
             <p class="target-version">{{ targetVersionLabel }}：<strong>{{ targetVersionText }}</strong></p>
-            <p v-if="launcherUpdateCheckError || operationErrorMessage || phase === 'error'" class="update-warning"><CircleAlert :size="18" />{{ launcherUpdateCheckError || operationErrorMessage || statusMessage }}</p>
           </div>
         </section>
 

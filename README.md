@@ -23,7 +23,7 @@ D:\UnrealMap\CrossingVoidinitiator-Android
 - 启动器与游戏统一使用 `com.TFAC.CorssingVoid`，游戏 APK 安装后直接替换启动器
 - 检测游戏包是否已安装
 - 显示当前游戏版本
-- 从正式更新接口读取 Android 游戏版本和 100 MiB 分片清单
+- 从 Gitee 权威清单读取 Android 游戏版本和 500 MiB 分片信息
 - 手机版启动器主界面
 - 原生前台服务下载、暂停、继续、取消和系统中断恢复
 - OSS 官方源与 Github 源，切换来源时复用已校验分片

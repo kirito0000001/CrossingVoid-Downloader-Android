@@ -21,6 +21,10 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class LauncherLogStore {
     public static final long MAX_LOG_BYTES = 10L * 1024L * 1024L;
@@ -29,8 +33,19 @@ public final class LauncherLogStore {
     private static final String LOG_FILE_NAME = "launcher.log";
     private static final String PREFS_NAME = "crossingvoid_launcher_log";
     private static final String PREF_INSTALLATION_ID = "installation_id";
+    private static final String PREF_LAST_AUTO_UPLOAD_ATTEMPT_AT = "last_auto_upload_attempt_at";
     private static final String UPLOAD_URL = "https://www.crossingvoid.top/api/launcher-diagnostics/upload-log";
+    private static final long AUTO_UPLOAD_DEBOUNCE_MS = 2_000L;
+    private static final long AUTO_UPLOAD_MIN_INTERVAL_MS = 60_000L;
     private static final Object FILE_LOCK = new Object();
+    private static final Object UPLOAD_LOCK = new Object();
+    private static final AtomicBoolean AUTO_UPLOAD_PENDING = new AtomicBoolean(false);
+    private static final AtomicBoolean AUTO_UPLOAD_DIRTY = new AtomicBoolean(false);
+    private static final ScheduledExecutorService AUTO_UPLOAD_EXECUTOR = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "launcher-log-auto-upload");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private LauncherLogStore() {
     }
@@ -45,6 +60,7 @@ public final class LauncherLogStore {
         if (!safeDetails.isBlank()) entry.put("details", safeDetails);
         byte[] lineBytes = (entry.toString() + "\n").getBytes(StandardCharsets.UTF_8);
 
+        JSONObject info;
         synchronized (FILE_LOCK) {
             File logFile = getLogFile(context);
             if (logFile.length() + lineBytes.length > MAX_LOG_BYTES) {
@@ -53,8 +69,12 @@ public final class LauncherLogStore {
             try (FileOutputStream output = new FileOutputStream(logFile, true)) {
                 output.write(lineBytes);
             }
-            return infoObject(context, logFile);
+            info = infoObject(context, logFile);
         }
+        if ("error".equalsIgnoreCase(level)) {
+            scheduleAutomaticUpload(context.getApplicationContext());
+        }
+        return info;
     }
 
     public static JSONObject getInfo(Context context) throws IOException, JSONException {
@@ -64,6 +84,12 @@ public final class LauncherLogStore {
     }
 
     public static JSONObject upload(Context context, String launcherVersion) throws IOException, JSONException {
+        synchronized (UPLOAD_LOCK) {
+            return uploadLocked(context, launcherVersion);
+        }
+    }
+
+    private static JSONObject uploadLocked(Context context, String launcherVersion) throws IOException, JSONException {
         byte[] content;
         String installationId;
         synchronized (FILE_LOCK) {
@@ -114,6 +140,42 @@ public final class LauncherLogStore {
             return result;
         } finally {
             connection.disconnect();
+        }
+    }
+
+    private static void scheduleAutomaticUpload(Context context) {
+        AUTO_UPLOAD_DIRTY.set(true);
+        if (!AUTO_UPLOAD_PENDING.compareAndSet(false, true)) return;
+
+        long now = System.currentTimeMillis();
+        long lastAttemptAt = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(PREF_LAST_AUTO_UPLOAD_ATTEMPT_AT, 0L);
+        long delay = Math.max(AUTO_UPLOAD_DEBOUNCE_MS, lastAttemptAt + AUTO_UPLOAD_MIN_INTERVAL_MS - now);
+        AUTO_UPLOAD_EXECUTOR.schedule(() -> runAutomaticUpload(context), delay, TimeUnit.MILLISECONDS);
+    }
+
+    private static void runAutomaticUpload(Context context) {
+        AUTO_UPLOAD_DIRTY.set(false);
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(PREF_LAST_AUTO_UPLOAD_ATTEMPT_AT, System.currentTimeMillis())
+            .apply();
+        try {
+            upload(context, getLauncherVersion(context));
+        } catch (Exception ignored) {
+            // The local log remains available for a later automatic or manual retry.
+        } finally {
+            AUTO_UPLOAD_PENDING.set(false);
+            if (AUTO_UPLOAD_DIRTY.get()) scheduleAutomaticUpload(context);
+        }
+    }
+
+    private static String getLauncherVersion(Context context) {
+        try {
+            String version = context.getPackageManager().getPackageInfo(context.getPackageName(), 0).versionName;
+            return version == null ? "" : version;
+        } catch (Exception ignored) {
+            return "";
         }
     }
 

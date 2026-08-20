@@ -196,7 +196,7 @@ Android 产品键：
 crossingvoid-android-game
 ```
 
-服务器返回版本、完整包 SHA-256、总大小和 100 MiB 分片列表。
+Gitee 权威清单提供版本、Release 标签、完整包 SHA-256、总大小和 500 MiB 分片列表。
 
 ### 7.2 OSS 官方源
 
@@ -469,7 +469,7 @@ xiaojie578/CrossingVoid-Downloader-PC
 
 ### Gitee 更新很慢或静默失败
 
-检查 Raw 清单 HTTP 状态、JSON 日期格式、Release 附件 URL、Gitee 100 MiB 限制和中文编码。上传使用 PowerShell 7/UTF-8 或 `curl.exe`，并输出 HTTP 响应正文。
+检查 Raw 清单 HTTP 状态、JSON 日期格式、Release 附件 URL 和中文编码。Gitee 只保存权威 JSON 清单，500 MiB 游戏分片存放在 Github 与 OSS。上传使用 PowerShell 7/UTF-8 或 `curl.exe`，并输出 HTTP 响应正文。
 
 ### `aapt` 无法读取中文路径 APK
 

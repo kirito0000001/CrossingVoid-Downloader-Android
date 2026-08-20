@@ -49,6 +49,16 @@ describe("Android launcher hot update manifest", () => {
     expect(shouldInstallLauncherUpdate(3, "1.0.0", manifest)).toBe(false);
   });
 
+  it("does not offer an invisible update when versionName is unchanged", () => {
+    const manifest = parseAndroidLauncherManifest({
+      ...createManifest(),
+      versionName: "1.1.0",
+      versionCode: 1_001_000,
+    });
+
+    expect(shouldInstallLauncherUpdate(1, "1.1.0", manifest)).toBe(false);
+  });
+
   it("rejects an invalid APK hash", () => {
     const payload = createManifest();
     payload.asset.sha256 = "not-a-sha256";

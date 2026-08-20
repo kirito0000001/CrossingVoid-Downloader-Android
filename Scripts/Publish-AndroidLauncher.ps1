@@ -141,7 +141,11 @@ try {
     & npx.cmd cap sync android
     if ($LASTEXITCODE -ne 0) { throw "Capacitor 同步失败。" }
 
-    $javaHome = "C:\Program Files\Java\jdk-23"
+    $javaHome = if (![string]::IsNullOrWhiteSpace($env:JAVA_HOME)) {
+        $env:JAVA_HOME
+    } else {
+        "C:\Program Files\Java\jdk-23"
+    }
     if (!(Test-Path -LiteralPath $javaHome -PathType Container)) { throw "没有找到 JDK 23：$javaHome" }
     $env:JAVA_HOME = $javaHome
     $env:Path = "$javaHome\bin;$env:Path"
@@ -158,7 +162,12 @@ try {
 
 $sourceApk = Join-Path $ProjectRoot "android\app\build\outputs\apk\release\app-release.apk"
 if (!(Test-Path -LiteralPath $sourceApk -PathType Leaf)) { throw "Release APK 不存在：$sourceApk" }
-$buildTools = Get-ChildItem "$env:LOCALAPPDATA\Android\Sdk\build-tools" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+$androidSdkRoot = if (![string]::IsNullOrWhiteSpace($env:ANDROID_SDK_ROOT)) {
+    $env:ANDROID_SDK_ROOT
+} else {
+    Join-Path $env:LOCALAPPDATA "Android\Sdk"
+}
+$buildTools = Get-ChildItem (Join-Path $androidSdkRoot "build-tools") -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
 if ($null -eq $buildTools) { throw "没有找到 Android SDK build-tools。" }
 $aapt = Join-Path $buildTools.FullName "aapt.exe"
 $apkSigner = Join-Path $buildTools.FullName "apksigner.bat"

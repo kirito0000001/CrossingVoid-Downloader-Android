@@ -74,8 +74,8 @@ export function shouldInstallLauncherUpdate(
   currentVersionName: string,
   manifest: AndroidLauncherUpdateManifest,
 ) {
-  if (manifest.versionCode !== currentVersionCode) return manifest.versionCode > currentVersionCode;
-  return compareVersionNames(currentVersionName, manifest.versionName) < 0;
+  if (compareVersionNames(currentVersionName, manifest.versionName) >= 0) return false;
+  return manifest.versionCode >= currentVersionCode;
 }
 
 function compareVersionNames(left: string, right: string) {

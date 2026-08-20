@@ -4,8 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
-import android.content.ClipData;
 import android.content.Context;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageInfo;
@@ -283,8 +283,13 @@ public class AndroidLauncherPlugin extends Plugin {
         try {
             JSObject state = JSObject.fromJSONObject(GameDownloadService.readStateObject(getContext()));
             String status = state.getString("status", "idle");
-            if (!GameDownloadService.isRunning() && (
+            if (!GameDownloadService.isRunning() && status.equals("cancelling")) {
+                GameDownloadService.clearAllDownloads(getContext());
+                state = JSObject.fromJSONObject(GameDownloadService.readStateObject(getContext()));
+            } else if (!GameDownloadService.isRunning() && (
                 status.equals("downloading") ||
+                status.equals("pausing") ||
+                status.equals("importing") ||
                 status.equals("verifying") ||
                 status.equals("merging") ||
                 status.equals("extracting")
@@ -323,6 +328,10 @@ public class AndroidLauncherPlugin extends Plugin {
             call.reject("缺少游戏下载清单。");
             return;
         }
+        if (GameDownloadService.isRunning()) {
+            call.reject("上一项游戏下载任务正在结束，请稍后再试。");
+            return;
+        }
         Intent intent = new Intent(getContext(), GameDownloadService.class);
         intent.setAction(GameDownloadService.ACTION_START);
         intent.putExtra(GameDownloadService.EXTRA_PLAN, plan.toString());
@@ -330,6 +339,49 @@ public class AndroidLauncherPlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("started", true);
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void importGameChunks(PluginCall call) {
+        if (call.getObject("plan") == null) {
+            call.reject("缺少游戏下载清单。");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(call, intent, "importGameChunksResult");
+    }
+
+    @ActivityCallback
+    private void importGameChunksResult(PluginCall call, ActivityResult result) {
+        Intent data = result.getData();
+        if (result.getResultCode() != Activity.RESULT_OK || data == null) {
+            call.reject("未选择游戏碎片。");
+            return;
+        }
+        Uri treeUri = data.getData();
+        if (treeUri == null) {
+            call.reject("未选择游戏碎片。");
+            return;
+        }
+        try {
+            getContext().getContentResolver().takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (SecurityException ignored) {
+            // Some providers only grant access for this process; import starts immediately.
+        }
+        if (GameDownloadService.isRunning()) {
+            call.reject("请等待当前下载任务暂停或取消完成后，再导入游戏碎片。");
+            return;
+        }
+        JSObject plan = call.getObject("plan");
+        Intent serviceIntent = new Intent(getContext(), GameDownloadService.class);
+        serviceIntent.setAction(GameDownloadService.ACTION_IMPORT);
+        serviceIntent.putExtra(GameDownloadService.EXTRA_PLAN, plan.toString());
+        serviceIntent.putExtra(GameDownloadService.EXTRA_IMPORT_TREE_URI, treeUri.toString());
+        ContextCompat.startForegroundService(getContext(), serviceIntent);
+        JSObject response = new JSObject();
+        response.put("started", true);
+        call.resolve(response);
     }
 
     @PluginMethod

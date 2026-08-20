@@ -29,6 +29,71 @@ describe("Android launcher hot update integration", () => {
     expect(appSource.indexOf("checkLauncherUpdate")).toBeLessThan(appSource.indexOf("refreshGameStatus"));
   });
 
+  it("keeps mandatory launcher updates on the main screen without a blocking overlay", () => {
+    const launcherCheckSource = appSource.slice(
+      appSource.indexOf("async function checkLauncherUpdate"),
+      appSource.indexOf("async function refreshGameStatus"),
+    );
+
+    expect(appSource).toContain("const launcherAccessLocked = computed");
+    expect(appSource).toContain("if (launcherAccessLocked.value &&");
+    expect(appSource).not.toContain('class="launcher-update-mask"');
+    expect(appSource).not.toContain('class="launcher-update-panel"');
+    expect(appSource).toContain('case "launcherUpdateReady"');
+    expect(appSource).toContain('case "launcherUpdateInstall"');
+    expect(appSource).toContain('if (phase.value === "launcherUpdateReady")');
+    expect(appSource).toContain('if (phase.value === "launcherUpdateInstall")');
+    expect(launcherCheckSource).toContain('phase.value = "error"');
+  });
+
+  it("keeps a local game chunk import entry for offline distribution", () => {
+    expect(appSource).toContain("导入游戏碎片");
+    expect(appSource).toContain("importGameChunks");
+    expect(appSource).toContain("选择包含全部游戏碎片的文件夹");
+  });
+
+  it("rechecks the latest launcher before every network game download", () => {
+    const downloadSource = appSource.slice(
+      appSource.indexOf("async function beginRealDownload"),
+      appSource.indexOf("async function importGameChunksFromDevice"),
+    );
+
+    expect(appSource).toContain("async function ensureLatestLauncherForNetworkDownload");
+    expect(downloadSource).toContain("await ensureLatestLauncherForNetworkDownload()");
+  });
+
+  it("does not apply the launcher update lock to local chunk import", () => {
+    const importSource = appSource.slice(
+      appSource.indexOf("async function importGameChunksFromDevice"),
+      appSource.indexOf("watch(downloadSource"),
+    );
+    const importButton = appSource.match(/<button[^>]+@click="importGameChunksFromDevice"[^>]*>/)?.[0] ?? "";
+
+    expect(importSource).not.toContain("launcherAccessLocked");
+    expect(importButton).not.toContain("launcherAccessLocked");
+  });
+
+  it("uses the global progress dock while downloading a launcher update", () => {
+    const progressSource = appSource.slice(
+      appSource.indexOf("const showGlobalProgress"),
+      appSource.indexOf("const progressAnimating"),
+    );
+
+    expect(progressSource).toContain('"launcherUpdating"');
+    expect(appSource).toContain('v-if="showGlobalProgress"');
+    expect(appSource).toContain("{{ Math.round(progress) }}%");
+  });
+
+  it("does not let game download broadcasts dismiss launcher update phases", () => {
+    const nativeStateHandler = appSource.slice(
+      appSource.indexOf("function applyNativeState"),
+      appSource.indexOf("function applyLauncherUpdateState"),
+    );
+
+    expect(nativeStateHandler).toContain("const preserveLauncherUpdatePhase = isLauncherUpdatePhase.value");
+    expect(nativeStateHandler).toContain("if (!preserveLauncherUpdatePhase)");
+  });
+
   it("keeps launcher update detection and actions visible in the UI", () => {
     expect(appSource).toContain("launcherUpdateStatusText");
     expect(appSource).toContain("handleLauncherUpdateCheck");

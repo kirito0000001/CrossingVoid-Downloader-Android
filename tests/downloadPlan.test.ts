@@ -10,6 +10,7 @@ function createUpdate(): AndroidGameUpdateInfo {
   return {
     version: "V0.5.14",
     channel: "stable",
+    downloadReleaseTag: "Android-V0.5.14",
     hasUpdate: true,
     message: "",
     asset: {
@@ -22,7 +23,8 @@ function createUpdate(): AndroidGameUpdateInfo {
         {
           index: 2,
           count: 2,
-          fileName: "package.zip.part002",
+          fileName: "CrossingVoid手机端.碎片002",
+          githubFileName: "CrossingVoid手机端.碎片002",
           objectKey: "releases/V0.5.14/chunks/package.zip.part002",
           sha256: "b".repeat(64),
           sizeBytes: 5,
@@ -30,7 +32,8 @@ function createUpdate(): AndroidGameUpdateInfo {
         {
           index: 1,
           count: 2,
-          fileName: "package.zip.part001",
+          fileName: "CrossingVoid手机端.碎片001",
+          githubFileName: "CrossingVoid手机端.碎片001",
           objectKey: "releases/V0.5.14/chunks/package.zip.part001",
           sha256: "c".repeat(64),
           sizeBytes: 7,
@@ -57,8 +60,8 @@ describe("Android download plan", () => {
 
     expect(plan.source).toBe("github");
     expect(plan.chunks.map((chunk) => chunk.downloadUrl)).toEqual([
-      "https://github.com/kirito0000001/CrossingVoid/releases/download/Android-V0.5.14/package.zip.part001",
-      "https://github.com/kirito0000001/CrossingVoid/releases/download/Android-V0.5.14/package.zip.part002",
+      "https://github.com/kirito0000001/CrossingVoid/releases/download/Android-V0.5.14/CrossingVoid%E6%89%8B%E6%9C%BA%E7%AB%AF.%E7%A2%8E%E7%89%87001",
+      "https://github.com/kirito0000001/CrossingVoid/releases/download/Android-V0.5.14/CrossingVoid%E6%89%8B%E6%9C%BA%E7%AB%AF.%E7%A2%8E%E7%89%87002",
     ]);
   });
 
@@ -81,6 +84,9 @@ describe("native download state mapping", () => {
   it("restores active, paused, processing, ready and failed states", () => {
     expect(launcherPhaseFromNativeState("downloading")).toBe("downloading");
     expect(launcherPhaseFromNativeState("paused")).toBe("paused");
+    expect(launcherPhaseFromNativeState("pausing")).toBe("verifying");
+    expect(launcherPhaseFromNativeState("cancelling")).toBe("verifying");
+    expect(launcherPhaseFromNativeState("importing")).toBe("verifying");
     expect(launcherPhaseFromNativeState("merging")).toBe("verifying");
     expect(launcherPhaseFromNativeState("extracting")).toBe("verifying");
     expect(launcherPhaseFromNativeState("ready")).toBe("readyInstall");

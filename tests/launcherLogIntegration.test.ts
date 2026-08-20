@@ -49,6 +49,15 @@ describe("native launcher log", () => {
     expect(bridgeSource).toContain("uploadLauncherLog(options");
   });
 
+  it("automatically uploads native logs after an error without flooding the server", () => {
+    expect(storeSource).toContain('if ("error".equalsIgnoreCase(level))');
+    expect(storeSource).toContain("scheduleAutomaticUpload(context.getApplicationContext())");
+    expect(storeSource).toContain("AUTO_UPLOAD_EXECUTOR");
+    expect(storeSource).toContain("AUTO_UPLOAD_DEBOUNCE_MS");
+    expect(storeSource).toContain("AUTO_UPLOAD_MIN_INTERVAL_MS");
+    expect(storeSource).toContain("synchronized (UPLOAD_LOCK)");
+  });
+
   it("captures global failures and user actions without logging every progress tick", () => {
     expect(loggerSource).toContain("installGlobalLauncherLogHandlers");
     expect(loggerSource).toContain('window.addEventListener("error"');
@@ -77,7 +86,8 @@ describe("native launcher log", () => {
   it("records native background download, OBB preparation, and launcher update states", () => {
     expect(gameDownloadSource).toContain("lastLoggedStateSignature");
     expect(gameDownloadSource).toContain('LauncherLogStore.append(this, level, "game-download.state"');
-    expect(gameDownloadSource).toContain('publishState("ready", "APK 和 OBB 已准备完成"');
+    expect(gameDownloadSource).toContain('terminalMessage = "APK 和 OBB 已准备完成"');
+    expect(gameDownloadSource).toContain("finishWorker(terminalStatus, terminalMessage");
     expect(launcherUpdateSource).toContain("lastLoggedStateSignature");
     expect(launcherUpdateSource).toContain('LauncherLogStore.append(context, level, "launcher-update.state"');
   });
