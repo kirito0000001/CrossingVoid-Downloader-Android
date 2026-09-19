@@ -57,7 +57,6 @@ public class GameDownloadService extends Service {
 
     private static final int MAX_ATTEMPTS = 3;
     private static final long STATE_INTERVAL_MS = 350L;
-    private static final String RECOVERY_MANIFEST_FILE = "零境启动器恢复信息.json";
 
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static final AtomicBoolean PAUSE_REQUESTED = new AtomicBoolean(false);
@@ -72,6 +71,7 @@ public class GameDownloadService extends Service {
     private int verifiedChunks;
     private String lastLoggedStateSignature = "";
     private DownloadNotifier notifier;
+    private ChunkTransfer transfer;
     private PackageInstaller installer;
     private ChunkDownloader downloader;
 
@@ -80,6 +80,33 @@ public class GameDownloadService extends Service {
         super.onCreate();
         notifier = DownloadNotifier.attach(this);
         notifier.createChannel();
+        transfer = new ChunkTransfer(getContentResolver(), new ChunkTransfer.Host() {
+            @Override
+            public void checkControlSignals() throws Exception {
+                GameDownloadService.this.checkControlSignals();
+            }
+
+            @Override
+            public void publishState(String status, String message, long downloadedBytes, double percent, int currentChunk, boolean force, PreparedFiles prepared) {
+                GameDownloadService.this.publishState(status, message, downloadedBytes, percent, currentChunk, force, prepared);
+            }
+
+            @Override
+            public void saveState(JSONObject state) {
+                saveAndBroadcastState(state);
+            }
+
+            @Override
+            public void notifyResult(boolean success, String message) {
+                if (success) notifier.showCompletion();
+                else notifier.showError(message);
+            }
+
+            @Override
+            public void cleanStaleObb(File obbDir, File currentObb) {
+                installer.removeStaleObbFiles(obbDir, currentObb);
+            }
+        });
         downloader = new ChunkDownloader(new ChunkDownloader.Host() {
             @Override
             public void publishProgress(String message, boolean force) {
@@ -280,9 +307,9 @@ public class GameDownloadService extends Service {
             DocumentFile root = DocumentFile.fromTreeUri(this, treeUri);
             if (root == null || !root.isDirectory()) throw new IOException("无法读取选择的游戏碎片文件夹。");
             List<DocumentFile> sourceFiles = new ArrayList<>();
-            collectChunkDocuments(activePlan, root, sourceFiles);
+            transfer.collectChunkDocuments(activePlan, root, sourceFiles);
             if (sourceFiles.isEmpty()) {
-                terminalPrepared = importPreparedRecoveryFiles(root, activePlan, downloadsRoot);
+                terminalPrepared = transfer.importPreparedRecoveryFiles(root, activePlan, downloadsRoot, getObbDir());
                 terminalStatus = "ready";
                 terminalMessage = "恢复文件校验完成，APK 和 OBB 已准备完成";
                 verifiedChunks = activePlan.chunks.size();
@@ -292,14 +319,14 @@ public class GameDownloadService extends Service {
             for (DocumentFile sourceFile : sourceFiles) {
                 checkControlSignals();
                 String name = sourceFile.getName();
-                DownloadChunk chunk = findChunkByName(activePlan, name);
+                DownloadChunk chunk = transfer.findChunkByName(activePlan, name);
                 if (chunk == null) continue;
                 File destination = new File(chunksDir, chunk.fileName);
                 if (destination.length() == chunk.sizeBytes && DownloadFileUtils.hashMatches(destination, chunk.sha256)) {
                     continue;
                 }
                 DownloadFileUtils.deleteFile(destination);
-                copyAndVerifyImportedChunk(sourceFile, chunk, destination, chunksDir);
+                transfer.copyAndVerifyImportedChunk(sourceFile, chunk, destination, chunksDir, activePlan);
                 imported++;
             }
             verifiedChunks = verifiedChunkCount(activePlan, chunksDir);
@@ -342,11 +369,11 @@ public class GameDownloadService extends Service {
             }
             File workDir = new File(LauncherStorage.downloadsRoot(this), "work-" + activePlan.archiveSha256.substring(0, 12));
             File chunksDir = new File(workDir, "chunks");
-            if (allChunksAvailable(activePlan, chunksDir)) {
-                exportVerifiedChunks(root, activePlan, chunksDir);
+            if (transfer.allChunksAvailable(activePlan, chunksDir)) {
+                transfer.exportVerifiedChunks(root, activePlan, chunksDir);
                 message = "游戏碎片已导出，可以卸载旧启动器";
             } else {
-                exportPreparedRecoveryFiles(root, previousState);
+                transfer.exportPreparedRecoveryFiles(activePlan, root, previousState);
                 message = "游戏恢复文件已导出，可以卸载旧启动器";
             }
             success = true;
@@ -359,238 +386,10 @@ public class GameDownloadService extends Service {
             } catch (Exception ignored) {
             }
         } finally {
-            restoreStateAfterExport(previousState, success, message);
+            transfer.restoreStateAfterExport(previousState, success, message);
             RUNNING.set(false);
             stopForeground(false);
             stopSelfResult(startId);
-        }
-    }
-
-    private boolean allChunksAvailable(DownloadPlan plan, File chunksDir) throws IOException {
-        for (DownloadChunk chunk : plan.chunks) {
-            File source = new File(chunksDir, chunk.fileName);
-            if (source.length() != chunk.sizeBytes || !DownloadFileUtils.hashMatches(source, chunk.sha256)) return false;
-        }
-        return true;
-    }
-
-    private void exportVerifiedChunks(DocumentFile root, DownloadPlan plan, File chunksDir) throws Exception {
-        long copiedBefore = 0L;
-        for (DownloadChunk chunk : plan.chunks) {
-            File source = new File(chunksDir, chunk.fileName);
-            copyAndVerifyExportedFile(source, root, chunk.fileName, chunk.sha256, chunk.sizeBytes,
-                copiedBefore, plan.totalBytes, chunk.index, chunk.count);
-            copiedBefore += chunk.sizeBytes;
-        }
-    }
-
-    private void exportPreparedRecoveryFiles(DocumentFile root, JSONObject previousState) throws Exception {
-        File apk = new File(previousState.optString("apkPath", ""));
-        File obb = new File(previousState.optString("obbPath", ""));
-        if (!apk.isFile() || !obb.isFile()) {
-            throw new IOException("旧版已经清理了游戏碎片，并且没有找到完整 APK 或 OBB。需要重新下载游戏。");
-        }
-        long total = Math.addExact(apk.length(), obb.length());
-        ExportedFile apkExport = copyAndVerifyExportedFile(apk, root, apk.getName(), "", apk.length(), 0L, total, 1, 2);
-        ExportedFile obbExport = copyAndVerifyExportedFile(obb, root, obb.getName(), "", obb.length(), apk.length(), total, 2, 2);
-        JSONObject manifest = new JSONObject();
-        manifest.put("schemaVersion", 1);
-        manifest.put("kind", "crossingvoid-prepared-recovery");
-        manifest.put("version", activePlan.version);
-        manifest.put("archiveSha256", activePlan.archiveSha256);
-        manifest.put("apk", apkExport.toJson());
-        manifest.put("obb", obbExport.toJson());
-        writeDocumentBytes(root, RECOVERY_MANIFEST_FILE, manifest.toString(2).getBytes(StandardCharsets.UTF_8));
-    }
-
-    private ExportedFile copyAndVerifyExportedFile(File source, DocumentFile root, String fileName, String expectedSha256,
-                                                    long expectedSize, long copiedBefore, long totalBytes,
-                                                    int itemIndex, int itemCount) throws Exception {
-        if (!source.isFile() || source.length() != expectedSize) throw new IOException("导出源文件不完整：" + fileName);
-        String temporaryName = fileName + ".exporting";
-        deleteDocument(root.findFile(temporaryName));
-        DocumentFile tempFile = root.createFile("application/octet-stream", temporaryName);
-        if (tempFile == null) throw new IOException("无法创建导出文件：" + temporaryName);
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        long copied = 0L;
-        try (InputStream input = new BufferedInputStream(new FileInputStream(source), DownloadFileUtils.BUFFER_SIZE);
-             OutputStream rawOutput = getContentResolver().openOutputStream(tempFile.getUri(), "wt");
-             OutputStream output = rawOutput == null ? null : new BufferedOutputStream(rawOutput, DownloadFileUtils.BUFFER_SIZE)) {
-            if (output == null) throw new IOException("无法写入导出文件：" + temporaryName);
-            byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                checkControlSignals();
-                if (read == 0) continue;
-                output.write(buffer, 0, read);
-                digest.update(buffer, 0, read);
-                copied += read;
-                long processed = copiedBefore + copied;
-                publishState("exporting", "正在导出第 " + itemIndex + " / " + itemCount + " 项：" + fileName,
-                    processed, processed / (double) Math.max(1L, totalBytes) * 100.0, itemIndex, false, null);
-            }
-        }
-        String actualHash = toHex(digest.digest());
-        String storedHash = sha256(tempFile);
-        if (copied != expectedSize || tempFile.length() != expectedSize || !actualHash.equalsIgnoreCase(storedHash)
-            || (!expectedSha256.isBlank() && !actualHash.equalsIgnoreCase(expectedSha256))) {
-            deleteDocument(tempFile);
-            throw new IOException("导出文件校验失败：" + fileName);
-        }
-        deleteDocument(root.findFile(fileName));
-        if (!tempFile.renameTo(fileName)) {
-            deleteDocument(tempFile);
-            throw new IOException("无法保存导出文件：" + fileName);
-        }
-        return new ExportedFile(fileName, expectedSize, actualHash);
-    }
-
-    private void writeDocumentBytes(DocumentFile root, String fileName, byte[] content) throws IOException {
-        String temporaryName = fileName + ".exporting";
-        deleteDocument(root.findFile(temporaryName));
-        DocumentFile temporary = root.createFile("application/json", temporaryName);
-        if (temporary == null) throw new IOException("无法创建恢复信息文件。");
-        try (OutputStream output = getContentResolver().openOutputStream(temporary.getUri(), "wt")) {
-            if (output == null) throw new IOException("无法写入恢复信息文件。");
-            output.write(content);
-        }
-        deleteDocument(root.findFile(fileName));
-        if (!temporary.renameTo(fileName)) throw new IOException("无法保存恢复信息文件。");
-    }
-
-    private String sha256(DocumentFile file) throws Exception {
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        try (InputStream rawInput = getContentResolver().openInputStream(file.getUri());
-             InputStream input = rawInput == null ? null : new BufferedInputStream(rawInput, DownloadFileUtils.BUFFER_SIZE)) {
-            if (input == null) throw new IOException("无法重新读取导出文件：" + file.getName());
-            byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                if (read > 0) digest.update(buffer, 0, read);
-            }
-        }
-        return toHex(digest.digest());
-    }
-
-    private void deleteDocument(DocumentFile file) throws IOException {
-        if (file != null && file.exists() && !file.delete()) throw new IOException("无法覆盖导出文件：" + file.getName());
-    }
-
-    private void restoreStateAfterExport(JSONObject previousState, boolean success, String message) {
-        JSONObject restored;
-        try {
-            restored = new JSONObject(previousState.toString());
-            restored.put("status", success ? "ready" : "error");
-            restored.put("message", message);
-            restored.put("canPause", false);
-            restored.put("updatedAt", System.currentTimeMillis());
-        } catch (JSONException error) {
-            restored = errorState(message);
-        }
-        saveAndBroadcastState(restored);
-        if (success) notifier.showCompletion();
-        else notifier.showError(message);
-    }
-
-    private PreparedFiles importPreparedRecoveryFiles(DocumentFile root, DownloadPlan plan, File downloadsRoot) throws Exception {
-        DocumentFile manifestFile = findDocumentByName(root, RECOVERY_MANIFEST_FILE);
-        if (manifestFile == null) {
-            throw new IOException("所选文件夹中没有当前版本的游戏碎片或零境启动器恢复文件。");
-        }
-        JSONObject manifest = new JSONObject(readDocumentText(manifestFile));
-        if (manifest.optInt("schemaVersion") != 1
-            || !"crossingvoid-prepared-recovery".equals(manifest.optString("kind"))
-            || !plan.version.equals(manifest.optString("version"))
-            || !plan.archiveSha256.equalsIgnoreCase(manifest.optString("archiveSha256"))) {
-            throw new IOException("恢复信息与当前游戏版本不匹配。");
-        }
-        JSONObject apkInfo = manifest.getJSONObject("apk");
-        JSONObject obbInfo = manifest.getJSONObject("obb");
-        String apkName = apkInfo.getString("fileName");
-        String obbName = obbInfo.getString("fileName");
-        if (!obbName.matches("^(main|patch)\\.\\d+\\.com\\.TFAC\\.CorssingVoid\\.obb$")) {
-            throw new IOException("恢复信息中的 OBB 文件名不正确。");
-        }
-        DocumentFile apkSource = findDocumentByName(root, apkName);
-        DocumentFile obbSource = findDocumentByName(root, obbName);
-        if (apkSource == null || obbSource == null) throw new IOException("恢复文件夹缺少 APK 或 OBB。");
-
-        File preparedDir = new File(downloadsRoot, "prepared");
-        File obbDir = getObbDir();
-        if (obbDir == null) throw new IOException("系统没有提供可用的游戏 OBB 目录");
-        DownloadFileUtils.ensureDirectory(preparedDir);
-        DownloadFileUtils.ensureDirectory(obbDir);
-        File apkDestination = new File(preparedDir, "CrossingVoid-latest.apk");
-        File obbDestination = new File(obbDir, obbName);
-        long apkSize = apkInfo.getLong("sizeBytes");
-        long obbSize = obbInfo.getLong("sizeBytes");
-        long total = Math.addExact(apkSize, obbSize);
-        copyAndVerifyRecoveryDocument(apkSource, apkDestination, apkSize, apkInfo.getString("sha256"), 0L, total, 1, 2);
-        copyAndVerifyRecoveryDocument(obbSource, obbDestination, obbSize, obbInfo.getString("sha256"), apkSize, total, 2, 2);
-        installer.removeStaleObbFiles(obbDir, obbDestination);
-        return new PreparedFiles(apkDestination, obbDestination, UUID.randomUUID().toString());
-    }
-
-    private void copyAndVerifyRecoveryDocument(DocumentFile source, File destination, long expectedSize,
-                                               String expectedSha256, long copiedBefore, long totalBytes,
-                                               int itemIndex, int itemCount) throws Exception {
-        if (expectedSize <= 0 || !expectedSha256.matches("^[a-fA-F0-9]{64}$")) {
-            throw new IOException("恢复文件校验信息不完整：" + source.getName());
-        }
-        DownloadFileUtils.ensureDirectory(destination.getParentFile());
-        File temporary = new File(destination.getParentFile(), destination.getName() + ".importing");
-        DownloadFileUtils.deleteFile(temporary);
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        long copied = 0L;
-        try (InputStream rawInput = getContentResolver().openInputStream(source.getUri());
-             InputStream input = rawInput == null ? null : new BufferedInputStream(rawInput, DownloadFileUtils.BUFFER_SIZE);
-             OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), DownloadFileUtils.BUFFER_SIZE)) {
-            if (input == null) throw new IOException("无法读取恢复文件：" + source.getName());
-            byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                checkControlSignals();
-                if (read == 0) continue;
-                output.write(buffer, 0, read);
-                digest.update(buffer, 0, read);
-                copied += read;
-                long processed = copiedBefore + copied;
-                publishState("importing", "正在恢复第 " + itemIndex + " / " + itemCount + " 项：" + source.getName(),
-                    processed, processed / (double) Math.max(1L, totalBytes) * 100.0, itemIndex, false, null);
-            }
-        }
-        String actualHash = toHex(digest.digest());
-        if (copied != expectedSize || temporary.length() != expectedSize || !actualHash.equalsIgnoreCase(expectedSha256)) {
-            DownloadFileUtils.deleteFile(temporary);
-            throw new IOException("恢复文件校验失败：" + source.getName());
-        }
-        DownloadFileUtils.deleteFile(destination);
-        if (!temporary.renameTo(destination)) throw new IOException("无法保存恢复文件：" + destination.getName());
-    }
-
-    private DocumentFile findDocumentByName(DocumentFile directory, String name) {
-        for (DocumentFile child : directory.listFiles()) {
-            if (child.isDirectory()) {
-                DocumentFile nested = findDocumentByName(child, name);
-                if (nested != null) return nested;
-            } else if (child.isFile() && name.equals(child.getName())) {
-                return child;
-            }
-        }
-        return null;
-    }
-
-    private String readDocumentText(DocumentFile file) throws IOException {
-        if (file.length() <= 0 || file.length() > 64L * 1024L) throw new IOException("恢复信息文件大小异常。");
-        try (InputStream input = getContentResolver().openInputStream(file.getUri());
-             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            if (input == null) throw new IOException("无法读取恢复信息文件。");
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                if (read > 0) output.write(buffer, 0, read);
-            }
-            return output.toString(StandardCharsets.UTF_8.name());
         }
     }
 
@@ -630,67 +429,6 @@ public class GameDownloadService extends Service {
             return;
         }
         saveAndBroadcastState(state);
-    }
-
-    private void collectChunkDocuments(DownloadPlan plan, DocumentFile directory, List<DocumentFile> result) {
-        for (DocumentFile child : directory.listFiles()) {
-            if (child.isDirectory()) {
-                collectChunkDocuments(plan, child, result);
-            } else if (child.isFile() && findChunkByName(plan, child.getName()) != null) {
-                result.add(child);
-            }
-        }
-    }
-
-    private DownloadChunk findChunkByName(DownloadPlan plan, String name) {
-        if (name == null || !name.matches("^CrossingVoid手机端\\.碎片\\d{3}$")) return null;
-        for (DownloadChunk chunk : plan.chunks) {
-            if (chunk.fileName.equals(name)) return chunk;
-        }
-        return null;
-    }
-
-    private void copyAndVerifyImportedChunk(DocumentFile source, DownloadChunk chunk, File destination, File chunksDir) throws Exception {
-        File temporary = new File(destination.getParentFile(), destination.getName() + ".importing");
-        DownloadFileUtils.deleteFile(temporary);
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException("SHA-256 is unavailable", error);
-        }
-        long copied = 0L;
-        long existing = DownloadFileUtils.existingChunkBytes(activePlan, chunksDir);
-        try (InputStream sourceInput = getContentResolver().openInputStream(source.getUri());
-             InputStream bufferedInput = sourceInput == null ? null : new BufferedInputStream(sourceInput, DownloadFileUtils.BUFFER_SIZE);
-             OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), DownloadFileUtils.BUFFER_SIZE)) {
-            if (bufferedInput == null) throw new IOException("无法读取导入的碎片：" + chunk.fileName);
-            byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
-            int read;
-            while ((read = bufferedInput.read(buffer)) >= 0) {
-                checkControlSignals();
-                if (read <= 0) continue;
-                output.write(buffer, 0, read);
-                digest.update(buffer, 0, read);
-                copied += read;
-                long processed = Math.min(activePlan.totalBytes, existing + copied);
-                publishState("importing", "正在导入并校验第 " + chunk.index + " / " + chunk.count + " 片", processed,
-                    processed / (double) activePlan.totalBytes * 85.0, chunk.index, true, null);
-            }
-        }
-        String actualHash = toHex(digest.digest());
-        if (copied != chunk.sizeBytes || !actualHash.equalsIgnoreCase(chunk.sha256)) {
-            DownloadFileUtils.deleteFile(temporary);
-            throw new IOException("导入碎片校验失败：" + chunk.fileName);
-        }
-        DownloadFileUtils.deleteFile(destination);
-        if (!temporary.renameTo(destination)) throw new IOException("无法保存导入碎片：" + destination.getName());
-    }
-
-    private static String toHex(byte[] bytes) {
-        StringBuilder result = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
-        return result.toString();
     }
 
     private int verifiedChunkCount(DownloadPlan plan, File chunksDir) throws IOException {
@@ -950,26 +688,6 @@ public class GameDownloadService extends Service {
             return String.format(Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
         }
         return String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
-    }
-
-    private static final class ExportedFile {
-        final String fileName;
-        final long sizeBytes;
-        final String sha256;
-
-        ExportedFile(String fileName, long sizeBytes, String sha256) {
-            this.fileName = fileName;
-            this.sizeBytes = sizeBytes;
-            this.sha256 = sha256;
-        }
-
-        JSONObject toJson() throws JSONException {
-            JSONObject result = new JSONObject();
-            result.put("fileName", fileName);
-            result.put("sizeBytes", sizeBytes);
-            result.put("sha256", sha256);
-            return result;
-        }
     }
 
     private static final class PausedException extends Exception {
