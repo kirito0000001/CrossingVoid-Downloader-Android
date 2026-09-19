@@ -9,10 +9,18 @@ const fileProviderPathsSource = readFileSync(
   resolve(process.cwd(), "android/app/src/main/res/xml/file_paths.xml"),
   "utf8",
 );
-const updateServiceSource = readFileSync(
-  resolve(process.cwd(), "android/app/src/main/java/com/lingjing/launcher/android/LauncherUpdateService.java"),
-  "utf8",
-);
+// 更新服务的下载与校验已拆到独立类，两个文件的源码一起断言，
+// 这样职责再搬家也不会误报。
+const updateServiceSource = [
+  readFileSync(
+    resolve(process.cwd(), "android/app/src/main/java/com/lingjing/launcher/android/LauncherUpdateService.java"),
+    "utf8",
+  ),
+  readFileSync(
+    resolve(process.cwd(), "android/app/src/main/java/com/lingjing/launcher/android/LauncherUpdateDownloader.java"),
+    "utf8",
+  ),
+].join("\n");
 const replacedReceiverSource = readFileSync(
   resolve(process.cwd(), "android/app/src/main/java/com/lingjing/launcher/android/LauncherReplacedReceiver.java"),
   "utf8",

@@ -47,19 +47,40 @@ public class LauncherUpdateService extends Service {
     static final String INSTALLER_PRODUCT_KEY = "crossingvoid-launcher-android-installer";
     private static final int BUFFER_SIZE = 256 * 1024;
     private static final int MAX_ATTEMPTS = 3;
-    private static final long STATE_INTERVAL_MS = 350L;
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static final AtomicBoolean CANCEL_REQUESTED = new AtomicBoolean(false);
     private static String lastLoggedStateSignature = "";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private LauncherUpdateNotifier notifier;
+    private LauncherUpdateDownloader downloader;
     private long lastStateAt;
 
     @Override
     public void onCreate() {
         super.onCreate();
         notifier.createChannel();
+        downloader = new LauncherUpdateDownloader(new LauncherUpdateDownloader.Host() {
+            @Override
+            public void checkCancelled() throws Exception {
+                LauncherUpdateService.this.checkCancelled();
+            }
+
+            @Override
+            public Context context() {
+                return LauncherUpdateService.this;
+            }
+
+            @Override
+            public void notifyProgress(int percent) {
+                notifier.update(percent);
+            }
+
+            @Override
+            public void notifyCompletion(String versionName) {
+                notifier.showCompletion(versionName);
+            }
+        });
     }
 
     @Override
@@ -122,8 +143,8 @@ public class LauncherUpdateService extends Service {
             deleteOtherVersions(root, partial, complete);
 
             if (complete.length() == plan.sizeBytes && DownloadFileUtils.sha256(complete).equalsIgnoreCase(plan.sha256)) {
-                validateDownloadedApk(complete, plan);
-                publishReady(plan, complete);
+                downloader.validateDownloadedApk(complete, plan);
+                downloader.publishReady(plan, complete);
                 return;
             }
             if (complete.exists()) complete.delete();
@@ -132,7 +153,7 @@ public class LauncherUpdateService extends Service {
             Exception lastError = null;
             for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                 try {
-                    download(plan, partial);
+                    downloader.download(plan, partial);
                     lastError = null;
                     break;
                 } catch (CancelledException cancelled) {
@@ -140,7 +161,7 @@ public class LauncherUpdateService extends Service {
                 } catch (Exception error) {
                     lastError = error;
                     if (attempt < MAX_ATTEMPTS) {
-                        publishDownloading(plan, partial.length(), "连接中断，正在重试 " + (attempt + 1) + " / " + MAX_ATTEMPTS, true);
+                        downloader.publishDownloading(plan, partial.length(), "连接中断，正在重试 " + (attempt + 1) + " / " + MAX_ATTEMPTS, true);
                         Thread.sleep(500L * attempt);
                     }
                 }
@@ -149,19 +170,19 @@ public class LauncherUpdateService extends Service {
             checkCancelled();
 
             if (partial.length() != plan.sizeBytes) throw new IOException("启动器安装包大小不正确");
-            publishDownloading(plan, partial.length(), "正在校验启动器安装包", true);
+            downloader.publishDownloading(plan, partial.length(), "正在校验启动器安装包", true);
             if (!DownloadFileUtils.sha256(partial).equalsIgnoreCase(plan.sha256)) {
                 partial.delete();
                 throw new IOException("启动器安装包 SHA-256 校验失败");
             }
             if (!partial.renameTo(complete)) throw new IOException("无法保存启动器安装包");
             try {
-                validateDownloadedApk(complete, plan);
+                downloader.validateDownloadedApk(complete, plan);
             } catch (Exception error) {
                 complete.delete();
                 throw error;
             }
-            publishReady(plan, complete);
+            downloader.publishReady(plan, complete);
             notifier.showCompletion(plan.versionName);
         } catch (CancelledException ignored) {
             clearAll(this);
@@ -170,7 +191,7 @@ public class LauncherUpdateService extends Service {
         } catch (Exception error) {
             String message = error.getMessage() == null || error.getMessage().isBlank() ? error.getClass().getSimpleName() : error.getMessage();
             JSONObject state = errorState(message);
-            if (plan != null) putPlanIdentity(state, plan);
+            if (plan != null) LauncherUpdateDownloader.putPlanIdentity(state, plan);
             publishState(this, state);
             notifier.showError(message);
         } finally {
@@ -178,108 +199,6 @@ public class LauncherUpdateService extends Service {
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
             stopForeground(false);
             stopSelf();
-        }
-    }
-
-    private void download(UpdatePlan plan, File outputFile) throws Exception {
-        long resumeFrom = outputFile.exists() ? outputFile.length() : 0L;
-        HttpURLConnection connection = (HttpURLConnection) new URL(plan.url).openConnection();
-        connection.setConnectTimeout(15_000);
-        connection.setReadTimeout(30_000);
-        connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "CrossingVoidAndroidLauncher/" + plan.versionName);
-        connection.setRequestProperty("Accept", "application/vnd.android.package-archive, application/octet-stream");
-        if (resumeFrom > 0) connection.setRequestProperty("Range", "bytes=" + resumeFrom + "-");
-        try {
-            int status = connection.getResponseCode();
-            if (status != HttpURLConnection.HTTP_OK && status != HttpURLConnection.HTTP_PARTIAL) {
-                throw new IOException("下载服务器返回 HTTP " + status);
-            }
-            if (resumeFrom > 0 && status != HttpURLConnection.HTTP_PARTIAL) resumeFrom = 0L;
-            try (
-                InputStream input = new BufferedInputStream(connection.getInputStream(), BUFFER_SIZE);
-                RandomAccessFile output = new RandomAccessFile(outputFile, "rw")
-            ) {
-                if (resumeFrom == 0L) output.setLength(0L);
-                output.seek(resumeFrom);
-                byte[] buffer = new byte[BUFFER_SIZE];
-                int read;
-                while ((read = input.read(buffer)) >= 0) {
-                    checkCancelled();
-                    if (read == 0) continue;
-                    output.write(buffer, 0, read);
-                    publishDownloading(plan, output.length(), "正在下载启动器 " + plan.versionName, false);
-                }
-            }
-        } finally {
-            connection.disconnect();
-        }
-    }
-
-    private void publishDownloading(UpdatePlan plan, long downloaded, String message, boolean force) {
-        long now = System.currentTimeMillis();
-        if (!force && now - lastStateAt < STATE_INTERVAL_MS) return;
-        lastStateAt = now;
-        JSONObject state = new JSONObject();
-        try {
-            state.put("status", "downloading");
-            state.put("message", message);
-            state.put("downloadedBytes", Math.max(0L, downloaded));
-            state.put("totalBytes", plan.sizeBytes);
-            state.put("percent", Math.min(100.0, downloaded / (double) plan.sizeBytes * 100.0));
-            putPlanIdentity(state, plan);
-        } catch (JSONException error) {
-            throw new IllegalStateException(error);
-        }
-        publishState(this, state);
-        notifier.update((int) Math.round(state.optDouble("percent", 0.0)));
-    }
-
-    private void validateDownloadedApk(File apk, UpdatePlan plan) throws Exception {
-        PackageManager packageManager = getPackageManager();
-        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-            ? PackageManager.GET_SIGNING_CERTIFICATES
-            : PackageManager.GET_SIGNATURES;
-        PackageInfo candidate = packageManager.getPackageArchiveInfo(apk.getAbsolutePath(), flags);
-        if (candidate == null || !getPackageName().equals(candidate.packageName)) {
-            throw new IOException("启动器安装包包名不正确");
-        }
-        if (LauncherUpdateVerifier.packageVersionCode(candidate) != plan.versionCode) {
-            throw new IOException("启动器安装包 versionCode 不正确");
-        }
-
-        PackageInfo installed = packageManager.getPackageInfo(getPackageName(), flags);
-        Signature[] installedSignatures = LauncherUpdateVerifier.packageSignatures(installed);
-        Signature[] candidateSignatures = LauncherUpdateVerifier.packageSignatures(candidate);
-        if (installedSignatures.length == 0 || candidateSignatures.length == 0 ||
-            !LauncherUpdateVerifier.sameSignatures(installedSignatures, candidateSignatures)) {
-            throw new IOException("启动器安装包签名不一致");
-        }
-    }
-
-    private void publishReady(UpdatePlan plan, File apk) {
-        JSONObject state = new JSONObject();
-        try {
-            state.put("status", "ready");
-            state.put("message", "启动器更新已准备完成");
-            state.put("downloadedBytes", plan.sizeBytes);
-            state.put("totalBytes", plan.sizeBytes);
-            state.put("percent", 100.0);
-            state.put("apkPath", apk.getAbsolutePath());
-            putPlanIdentity(state, plan);
-        } catch (JSONException error) {
-            throw new IllegalStateException(error);
-        }
-        publishState(this, state);
-    }
-
-    private static void putPlanIdentity(JSONObject state, UpdatePlan plan) {
-        try {
-            state.put("versionName", plan.versionName);
-            state.put("versionCode", plan.versionCode);
-            state.put("sha256", plan.sha256);
-        } catch (JSONException error) {
-            throw new IllegalStateException(error);
         }
     }
 
