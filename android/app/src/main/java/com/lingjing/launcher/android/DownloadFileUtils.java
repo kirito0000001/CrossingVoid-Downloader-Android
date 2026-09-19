@@ -40,6 +40,15 @@ final class DownloadFileUtils {
         return true;
     }
 
+    static long existingChunkBytes(DownloadPlan plan, File chunksDir) {
+        long total = 0L;
+        for (DownloadChunk chunk : plan.chunks) {
+            File file = new File(chunksDir, chunk.fileName);
+            total += Math.min(chunk.sizeBytes, Math.max(0L, file.length()));
+        }
+        return total;
+    }
+
     static boolean hashMatches(File file, String expected) throws IOException {
         return sha256(file).equalsIgnoreCase(expected);
     }

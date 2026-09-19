@@ -227,7 +227,7 @@ public class GameDownloadService extends Service {
             JSONObject previous = readStateObject(this);
             verifiedChunks = activePlan.matchesState(previous) ? previous.optInt("verifiedChunks", 0) : 0;
             verifiedChunks = Math.max(0, Math.min(verifiedChunks, activePlan.chunks.size()));
-            long existingBytes = existingChunkBytes(activePlan, chunksDir);
+            long existingBytes = DownloadFileUtils.existingChunkBytes(activePlan, chunksDir);
             long requiredBytes = requiredAvailableBytes(activePlan, archiveFile, existingBytes);
             long availableBytes = new StatFs(downloadsRoot.getAbsolutePath()).getAvailableBytes();
             if (availableBytes < requiredBytes) {
@@ -660,7 +660,7 @@ public class GameDownloadService extends Service {
             throw new IllegalStateException("SHA-256 is unavailable", error);
         }
         long copied = 0L;
-        long existing = existingChunkBytes(activePlan, chunksDir);
+        long existing = DownloadFileUtils.existingChunkBytes(activePlan, chunksDir);
         try (InputStream sourceInput = getContentResolver().openInputStream(source.getUri());
              InputStream bufferedInput = sourceInput == null ? null : new BufferedInputStream(sourceInput, DownloadFileUtils.BUFFER_SIZE);
              OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), DownloadFileUtils.BUFFER_SIZE)) {
@@ -881,7 +881,7 @@ public class GameDownloadService extends Service {
             return 0L;
         }
         File chunksDir = new File(new File(LauncherStorage.downloadsRoot(this), "work-" + activePlan.archiveSha256.substring(0, 12)), "chunks");
-        return existingChunkBytes(activePlan, chunksDir);
+        return DownloadFileUtils.existingChunkBytes(activePlan, chunksDir);
     }
 
     private int currentChunkIndex() {
@@ -890,15 +890,6 @@ public class GameDownloadService extends Service {
 
     private double currentPercent() {
         return activePlan == null || activePlan.totalBytes <= 0 ? 0.0 : Math.min(85.0, downloadedBytes() / (double) activePlan.totalBytes * 85.0);
-    }
-
-    private long existingChunkBytes(DownloadPlan plan, File chunksDir) {
-        long total = 0L;
-        for (DownloadChunk chunk : plan.chunks) {
-            File file = new File(chunksDir, chunk.fileName);
-            total += Math.min(chunk.sizeBytes, Math.max(0L, file.length()));
-        }
-        return total;
     }
 
     private long requiredAvailableBytes(DownloadPlan plan, File archiveFile, long existingChunkBytes) {

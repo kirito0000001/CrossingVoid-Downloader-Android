@@ -7,8 +7,12 @@ import static org.junit.Assert.assertTrue;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
+import java.io.File;
+import java.nio.file.Files;
 import java.util.Locale;
 
 /**
@@ -18,6 +22,9 @@ import java.util.Locale;
 public class DownloadPlanTest {
     private static final String ARCHIVE_SHA = "a".repeat(64);
     private static final String CHUNK_SHA = "b".repeat(64);
+
+    @Rule
+    public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
     private static JSONObject chunk(int index, int count, long sizeBytes) throws JSONException {
         JSONObject chunk = new JSONObject();
@@ -212,5 +219,15 @@ public class DownloadPlanTest {
 
         same.put("version", "V0.5.13");
         assertFalse(plan.matchesState(same));
+    }
+
+    @Test
+    public void countsOnlyBytesActuallyPresentOnDisk() throws Exception {
+        DownloadPlan plan = parse(manifest());
+        File chunksDir = temporaryFolder.newFolder("chunks");
+        Files.write(new File(chunksDir, "CrossingVoid手机端.碎片001").toPath(), new byte[1000]);
+        Files.write(new File(chunksDir, "CrossingVoid手机端.碎片002").toPath(), new byte[400]);
+
+        assertEquals(1400L, DownloadFileUtils.existingChunkBytes(plan, chunksDir));
     }
 }
