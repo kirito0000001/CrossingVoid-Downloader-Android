@@ -55,7 +55,6 @@ public class GameDownloadService extends Service {
     public static final String EXTRA_IMPORT_TREE_URI = "importTreeUri";
     public static final String EXTRA_EXPORT_TREE_URI = "exportTreeUri";
 
-    private static final String UPDATE_API = "https://www.crossingvoid.top/api/toolbox-updates/sign-download";
     private static final String PREFS_NAME = "crossingvoid_download";
     private static final String PREF_STATE = "state";
     private static final String PREF_PLAN = "plan";
@@ -79,12 +78,24 @@ public class GameDownloadService extends Service {
     private String lastLoggedStateSignature = "";
     private DownloadNotifier notifier;
     private PackageInstaller installer;
+    private ChunkDownloader downloader;
 
     @Override
     public void onCreate() {
         super.onCreate();
         notifier = DownloadNotifier.attach(this);
         notifier.createChannel();
+        downloader = new ChunkDownloader(new ChunkDownloader.Host() {
+            @Override
+            public void publishProgress(String message, boolean force) {
+                publishDownloadProgress(message, force);
+            }
+
+            @Override
+            public void checkControlSignals() throws Exception {
+                GameDownloadService.this.checkControlSignals();
+            }
+        });
         installer = new PackageInstaller(new PackageInstaller.Progress() {
             @Override
             public void publish(String status, String message, long downloadedBytes, double percent, int currentChunk, boolean force) {
@@ -718,7 +729,7 @@ public class GameDownloadService extends Service {
             for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                 checkControlSignals();
                 try {
-                    downloadChunk(plan, chunk, file);
+                    downloader.download(plan, chunk, file, currentLauncherVersion());
                     if (file.length() != chunk.sizeBytes) {
                         throw new IOException("第 " + chunk.index + " 片大小不正确");
                     }
@@ -744,92 +755,6 @@ public class GameDownloadService extends Service {
             if (lastError != null) {
                 throw new IOException("第 " + chunk.index + " 片下载失败：" + lastError.getMessage(), lastError);
             }
-        }
-    }
-
-    private void downloadChunk(DownloadPlan plan, DownloadChunk chunk, File outputFile) throws Exception {
-        String officialUrl = plan.source.equals("official") ? signChunkUrl(plan, chunk) : "";
-        String downloadUrl = DownloadFileUtils.resolveDownloadUrl(plan.source, chunk.downloadUrl, officialUrl);
-        long resumeFrom = outputFile.exists() ? outputFile.length() : 0L;
-        HttpURLConnection connection = (HttpURLConnection) new URL(downloadUrl).openConnection();
-        connection.setConnectTimeout(15_000);
-        connection.setReadTimeout(30_000);
-        connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "CrossingVoidAndroidLauncher/" + currentLauncherVersion());
-        connection.setRequestProperty("Accept", "application/octet-stream");
-        if (resumeFrom > 0) {
-            connection.setRequestProperty("Range", "bytes=" + resumeFrom + "-");
-        }
-
-        try {
-            int status = connection.getResponseCode();
-            if (status == 416 && resumeFrom == chunk.sizeBytes) {
-                return;
-            }
-            if (status != HttpURLConnection.HTTP_OK && status != HttpURLConnection.HTTP_PARTIAL) {
-                throw new IOException("下载服务器返回 HTTP " + status);
-            }
-            if (resumeFrom > 0 && status != HttpURLConnection.HTTP_PARTIAL) {
-                resumeFrom = 0;
-            }
-
-            DownloadFileUtils.ensureDirectory(outputFile.getParentFile());
-            try (
-                InputStream input = new BufferedInputStream(connection.getInputStream(), DownloadFileUtils.BUFFER_SIZE);
-                RandomAccessFile output = new RandomAccessFile(outputFile, "rw")
-            ) {
-                if (resumeFrom == 0) {
-                    output.setLength(0);
-                }
-                output.seek(resumeFrom);
-                byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
-                int read;
-                while ((read = input.read(buffer)) >= 0) {
-                    checkControlSignals();
-                    if (read == 0) {
-                        continue;
-                    }
-                    output.write(buffer, 0, read);
-                    publishDownloadProgress("正在下载第 " + chunk.index + " / " + chunk.count + " 片", false);
-                }
-            }
-        } finally {
-            connection.disconnect();
-        }
-    }
-
-    private String signChunkUrl(DownloadPlan plan, DownloadChunk chunk) throws Exception {
-        JSONObject request = new JSONObject();
-        request.put("productKey", plan.productKey);
-        request.put("version", plan.version);
-        request.put("runtime", plan.runtime);
-        request.put("objectKey", chunk.objectKey);
-        request.put("launcherVersion", currentLauncherVersion());
-
-        HttpURLConnection connection = (HttpURLConnection) new URL(UPDATE_API).openConnection();
-        connection.setRequestMethod("POST");
-        connection.setDoOutput(true);
-        connection.setConnectTimeout(12_000);
-        connection.setReadTimeout(15_000);
-        connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        connection.setRequestProperty("User-Agent", "CrossingVoidAndroidLauncher/" + currentLauncherVersion());
-        try {
-            byte[] body = request.toString().getBytes(StandardCharsets.UTF_8);
-            try (OutputStream output = connection.getOutputStream()) {
-                output.write(body);
-            }
-            int status = connection.getResponseCode();
-            String response = readResponse(connection, status);
-            if (status < 200 || status >= 300) {
-                throw new IOException("签名服务器返回 HTTP " + status + "：" + response);
-            }
-            JSONObject payload = new JSONObject(response);
-            if (!payload.optBoolean("success", false) || payload.optString("url").isBlank()) {
-                throw new IOException(payload.optString("message", "无法获取下载地址"));
-            }
-            return payload.getString("url");
-        } finally {
-            connection.disconnect();
         }
     }
 
@@ -1088,23 +1013,6 @@ public class GameDownloadService extends Service {
             long duration = Math.min(100L, remaining);
             Thread.sleep(duration);
             remaining -= duration;
-        }
-    }
-
-    private static String readResponse(HttpURLConnection connection, int status) throws IOException {
-        InputStream stream = status >= 200 && status < 400 ? connection.getInputStream() : connection.getErrorStream();
-        if (stream == null) {
-            return "";
-        }
-        try (InputStream input = stream; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                if (read > 0) {
-                    output.write(buffer, 0, read);
-                }
-            }
-            return output.toString(StandardCharsets.UTF_8.name());
         }
     }
 

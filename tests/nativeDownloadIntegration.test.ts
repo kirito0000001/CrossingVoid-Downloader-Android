@@ -118,7 +118,7 @@ describe("native Android game download integration", () => {
   });
 
   it("identifies the exact launcher version when requesting an OSS signed URL", () => {
-    expect(downloadServiceSource).toContain('request.put("launcherVersion"');
+    expect(nativeSource).toContain('request.put("launcherVersion"');
     expect(downloadServiceSource).toContain("currentLauncherVersion");
     expect(downloadServiceSource).not.toContain('CrossingVoidAndroidLauncher/1.0"');
   });
