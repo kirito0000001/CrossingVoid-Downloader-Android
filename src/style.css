@@ -353,13 +353,6 @@ button {
   font-size: 13px;
 }
 
-.home-tools {
-  margin-top: 12px;
-  display: flex;
-  gap: 10px;
-}
-
-.home-tools button,
 .setting-row button {
   min-width: 132px;
   min-height: 48px;
@@ -379,11 +372,6 @@ button {
   border-color: rgba(255, 145, 139, 0.44);
   color: #ffe8e2;
   background: rgba(103, 56, 53, 0.88);
-}
-
-.home-tools .danger-action {
-  color: #ffe8e2;
-  background: rgba(103, 56, 53, 0.9);
 }
 
 .panel-page {
@@ -536,10 +524,6 @@ button {
 .source-options strong,
 .source-options span {
   display: block;
-}
-
-.source-options .source-disabled-note {
-  color: var(--cv-danger);
 }
 
 .source-options span {
@@ -960,14 +944,6 @@ button {
 
   .update-warning {
     display: none;
-  }
-
-  .home-tools {
-    margin-top: 8px;
-  }
-
-  .home-tools button {
-    min-height: 44px;
   }
 
   .panel-body {
