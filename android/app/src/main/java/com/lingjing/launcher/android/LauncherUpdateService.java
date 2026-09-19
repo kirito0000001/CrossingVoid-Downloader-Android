@@ -41,16 +41,15 @@ public class LauncherUpdateService extends Service {
     public static final String EXTRA_PLAN = "launcherUpdatePlan";
     public static final String EXTRA_STATE = "launcherUpdateState";
 
-    private static final String PREFS_NAME = "crossingvoid_launcher_update";
-    private static final String PREF_PLAN = "plan";
-    private static final String PREF_STATE = "state";
+    static final String PREFS_NAME = "crossingvoid_launcher_update";
+    static final String PREF_PLAN = "plan";
+    static final String PREF_STATE = "state";
     private static final String INSTALLER_PRODUCT_KEY = "crossingvoid-launcher-android-installer";
     private static final int BUFFER_SIZE = 256 * 1024;
     private static final int MAX_ATTEMPTS = 3;
     private static final long STATE_INTERVAL_MS = 350L;
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static final AtomicBoolean CANCEL_REQUESTED = new AtomicBoolean(false);
-    private static final Object STATE_LOCK = new Object();
     private static String lastLoggedStateSignature = "";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -310,18 +309,6 @@ public class LauncherUpdateService extends Service {
         }
     }
 
-    public static JSONObject readState(Context context) {
-        synchronized (STATE_LOCK) {
-            String json = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_STATE, "");
-            if (json == null || json.isBlank()) return idleState();
-            try {
-                return new JSONObject(json);
-            } catch (JSONException ignored) {
-                return errorState("启动器更新状态已损坏，请重新下载。");
-            }
-        }
-    }
-
     public static JSONObject clearIfInstalled(Context context, long currentVersionCode, String currentVersionName) {
         JSONObject state = readState(context);
         long targetVersionCode = state.optLong("versionCode", 0L);
@@ -357,6 +344,22 @@ public class LauncherUpdateService extends Service {
         }
     }
 
+    public static JSONObject readState(Context context) {
+        return UpdateStateStore.readState(context);
+    }
+
+    private static JSONObject idleState() {
+        return UpdateStateStore.idleState();
+    }
+
+    private static JSONObject errorState(String message) {
+        return UpdateStateStore.errorState(message);
+    }
+
+    private static void publishState(Context context, JSONObject state) {
+        UpdateStateStore.publishState(context, state);
+    }
+
     public static boolean isRunning() {
         return RUNNING.get();
     }
@@ -364,52 +367,6 @@ public class LauncherUpdateService extends Service {
     public static void clearAll(Context context) {
         deleteRecursively(getUpdateRoot(context));
         context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply();
-    }
-
-    private static void publishState(Context context, JSONObject state) {
-        String json = state.toString();
-        String status = state.optString("status", "idle");
-        String message = state.optString("message", status);
-        String logSignature = status + "|" + message;
-        boolean shouldLog;
-        synchronized (STATE_LOCK) {
-            shouldLog = !logSignature.equals(lastLoggedStateSignature);
-            if (shouldLog) lastLoggedStateSignature = logSignature;
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_STATE, json).apply();
-        }
-        if (shouldLog) {
-            String level = status.equals("error") ? "error" : "info";
-            try {
-                LauncherLogStore.append(context, level, "launcher-update.state", message, json);
-            } catch (Exception ignored) {
-            }
-        }
-        Intent update = new Intent(ACTION_STATE).setPackage(context.getPackageName());
-        update.putExtra(EXTRA_STATE, json);
-        context.sendBroadcast(update);
-    }
-
-    private static JSONObject idleState() {
-        JSONObject state = new JSONObject();
-        try {
-            state.put("status", "idle");
-            state.put("message", "启动器已是最新版本");
-            state.put("downloadedBytes", 0L);
-            state.put("totalBytes", 0L);
-            state.put("percent", 0.0);
-        } catch (JSONException ignored) {
-        }
-        return state;
-    }
-
-    private static JSONObject errorState(String message) {
-        JSONObject state = idleState();
-        try {
-            state.put("status", "error");
-            state.put("message", message);
-        } catch (JSONException ignored) {
-        }
-        return state;
     }
 
     private void checkCancelled() throws CancelledException {

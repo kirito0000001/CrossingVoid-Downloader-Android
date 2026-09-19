@@ -10,6 +10,9 @@ function readSource(path: string) {
 const storeSource = readSource(
   "android/app/src/main/java/com/lingjing/launcher/android/LauncherLogStore.java",
 );
+const updateStateStoreSource = readSource(
+  "android/app/src/main/java/com/lingjing/launcher/android/UpdateStateStore.java",
+);
 const pluginSource = readSource(
   "android/app/src/main/java/com/lingjing/launcher/android/AndroidLauncherPlugin.java",
 );
@@ -96,6 +99,6 @@ describe("native launcher log", () => {
     expect(gameDownloadSource).toContain('terminalMessage = "APK 和 OBB 已准备完成"');
     expect(gameDownloadSource).toContain("finishWorker(terminalStatus, terminalMessage");
     expect(launcherUpdateSource).toContain("lastLoggedStateSignature");
-    expect(launcherUpdateSource).toContain('LauncherLogStore.append(context, level, "launcher-update.state"');
+    expect(launcherUpdateSource + updateStateStoreSource).toContain('LauncherLogStore.append(context, level, "launcher-update.state"');
   });
 });
