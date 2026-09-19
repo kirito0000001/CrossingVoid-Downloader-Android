@@ -35,8 +35,8 @@ describe("Android launcher hot update integration", () => {
       appSource.indexOf("async function refreshGameStatus"),
     );
 
-    expect(appSource).toContain("const launcherAccessLocked = computed");
-    expect(appSource).toContain("if (launcherAccessLocked.value &&");
+    expect(appSource).toContain("const launcherNetworkLocked = computed");
+    expect(appSource).toContain("if (launcherNetworkLocked.value &&");
     expect(appSource).not.toContain('class="launcher-update-mask"');
     expect(appSource).not.toContain('class="launcher-update-panel"');
     expect(appSource).toContain('case "launcherUpdateReady"');
@@ -50,6 +50,20 @@ describe("Android launcher hot update integration", () => {
     expect(appSource).toContain("导入游戏碎片");
     expect(appSource).toContain("importGameChunks");
     expect(appSource).toContain("选择包含全部游戏碎片的文件夹");
+  });
+
+  it("exports complete verified chunks and shows export progress in the global dock", () => {
+    expect(bridgeSource).toContain("exportGameChunks");
+    expect(appSource).toContain("导出已下载碎片");
+    expect(appSource).toContain("exportGameChunksFromDevice");
+    expect(appSource).toContain("canExportGameChunks");
+    expect(appSource).toContain("verifiedChunks.value === totalChunks.value");
+    expect(appSource).toContain('case "exporting"');
+    const progressSource = appSource.slice(
+      appSource.indexOf("const showGlobalProgress"),
+      appSource.indexOf("const progressAnimating"),
+    );
+    expect(progressSource).toContain('"exporting"');
   });
 
   it("rechecks the latest launcher before every network game download", () => {

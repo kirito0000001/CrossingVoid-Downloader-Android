@@ -53,6 +53,31 @@ describe("native Android game download integration", () => {
     expect(downloadServiceSource).not.toContain("EXTRA_IMPORT_URIS");
   });
 
+  it("exports verified chunks through the foreground service without mutating source files", () => {
+    expect(nativeBridgeSource).toContain("exportGameChunks()");
+    expect(pluginSource).toContain("exportGameChunks(PluginCall call)");
+    expect(pluginSource).toContain("Intent.FLAG_GRANT_WRITE_URI_PERMISSION");
+    expect(pluginSource).toContain("Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION");
+    expect(pluginSource).toContain("takePersistableUriPermission");
+    expect(downloadServiceSource).toContain("ACTION_EXPORT");
+    expect(downloadServiceSource).toContain("EXTRA_EXPORT_TREE_URI");
+    expect(downloadServiceSource).toContain("getString(PREF_PLAN");
+    expect(downloadServiceSource).toContain('publishState("exporting"');
+    expect(downloadServiceSource).toContain(".exporting");
+    expect(downloadServiceSource).toContain("sha256(tempFile)");
+    expect(downloadServiceSource).toContain("source.length() != chunk.sizeBytes");
+    expect(downloadServiceSource).toContain("RECOVERY_MANIFEST_FILE");
+    expect(downloadServiceSource).toContain("exportPreparedRecoveryFiles");
+    expect(downloadServiceSource).toContain("importPreparedRecoveryFiles");
+    expect(downloadServiceSource).toContain('previousState.optString("apkPath"');
+    expect(downloadServiceSource).toContain('previousState.optString("obbPath"');
+    expect(downloadServiceSource).toContain("copyPreparedStateFields");
+    expect(downloadServiceSource).toContain('status.equals("exporting")');
+    expect(downloadServiceSource).toContain('"error".equals(previousState.optString("status"))');
+    expect(downloadServiceSource).not.toContain("source.delete()");
+    expect(downloadServiceSource).not.toContain("source.renameTo(");
+  });
+
   it("redelivers active foreground tasks after Android reclaims the process", () => {
     expect(downloadServiceSource).toContain("return START_REDELIVER_INTENT;");
     expect(launcherUpdateServiceSource).toContain("return START_REDELIVER_INTENT;");

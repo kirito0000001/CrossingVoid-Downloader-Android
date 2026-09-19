@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ANDROID_LAUNCHER_MANIFEST_URL,
   parseAndroidLauncherManifest,
   shouldInstallLauncherUpdate,
 } from "../src/services/launcherUpdate";
@@ -23,6 +24,12 @@ function createManifest() {
 }
 
 describe("Android launcher hot update manifest", () => {
+  it("checks launcher updates through the stable website manifest", () => {
+    expect(ANDROID_LAUNCHER_MANIFEST_URL).toBe(
+      "https://www.crossingvoid.top/manifests/launcher/android-latest.json",
+    );
+  });
+
   it("parses a signed APK release", () => {
     const manifest = parseAndroidLauncherManifest(createManifest());
 

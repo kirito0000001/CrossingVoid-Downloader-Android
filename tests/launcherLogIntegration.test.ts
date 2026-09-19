@@ -56,6 +56,11 @@ describe("native launcher log", () => {
     expect(storeSource).toContain("AUTO_UPLOAD_DEBOUNCE_MS");
     expect(storeSource).toContain("AUTO_UPLOAD_MIN_INTERVAL_MS");
     expect(storeSource).toContain("synchronized (UPLOAD_LOCK)");
+    expect(storeSource).toContain("isNetworkAccessAllowed");
+    expect(pluginSource).toContain("setLauncherNetworkAccess(PluginCall call)");
+    expect(bridgeSource).toContain("setLauncherNetworkAccess(options");
+    expect(appSource).toContain("await setLauncherNetworkAccess(false)");
+    expect(appSource).toContain("await setLauncherNetworkAccess(true)");
   });
 
   it("captures global failures and user actions without logging every progress tick", () => {
@@ -79,6 +84,8 @@ describe("native launcher log", () => {
     expect(appSource).toContain("launcherLogUploadState");
     expect(appSource).toContain("getLauncherLogInfo");
     expect(appSource).toContain("uploadLauncherLog");
+    expect(appSource).toContain("if (launcherNetworkLocked.value)");
+    expect(appSource).toContain(":disabled=\"launcherNetworkLocked || launcherLogUploadState === 'uploading' || !launcherLogInfo?.hasLog\"");
     expect(appSource).not.toContain("reportAndroidDiagnostic");
     expect(appSource).not.toContain("flushAndroidDiagnostics");
   });

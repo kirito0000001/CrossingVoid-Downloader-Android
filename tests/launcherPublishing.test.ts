@@ -25,7 +25,7 @@ describe("Android launcher release publishing", () => {
     expect(publisherSource).toContain("SHA256");
     expect(publisherSource).toContain("assembleRelease");
     expect(publisherSource).not.toMatch(/MigrationBridge|AndroidMigrationBridge/);
-    expect(publisherSource).not.toContain("launcher/android-latest.json");
+    expect(publisherSource).not.toContain('manifestRepositoryPath = "launcher/android-latest.json"');
     expect(publisherSource).not.toContain("com.TFAC.CorssingVoidLauncher");
   });
 
@@ -34,14 +34,29 @@ describe("Android launcher release publishing", () => {
     expect(existsSync(resolve(process.cwd(), "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml"))).toBe(false);
   });
 
-  it("keeps Android launcher updates in the Android-only Gitee repository", () => {
+  it("keeps Android launcher assets in Gitee while clients read the website manifest", () => {
     const expectedRepository = "xiaojie578/CrossingVoid-Downloader-Android";
     const oldMixedRepository = "xiaojie578/CrossingVoid-Downloader/raw";
 
     expect(publisherSource).toContain(expectedRepository);
-    expect(launcherUpdateSource).toContain(`${expectedRepository}/raw/master/launcher/android-installer-latest.json`);
+    expect(launcherUpdateSource).toContain("https://www.crossingvoid.top/manifests/launcher/android-latest.json");
     expect(appSource).toContain(`https://gitee.com/${expectedRepository}`);
     expect(publisherSource).not.toContain(oldMixedRepository);
     expect(launcherUpdateSource).not.toContain(oldMixedRepository);
+  });
+
+  it("locks normal builds to versionCode 1 and requires an explicit recovery build for 1001003", () => {
+    expect(publisherSource).toContain("[switch]$RecoveryBuild");
+    expect(publisherSource).toContain("$NormalVersionCode = 1");
+    expect(publisherSource).toContain("$RecoveryVersionCode = 1001003");
+    expect(publisherSource).not.toContain("[int]$VersionCode,");
+    expect(publisherSource).toContain("$VersionCode = if ($RecoveryBuild) { $RecoveryVersionCode } else { $NormalVersionCode }");
+  });
+
+  it("publishes the Android launcher manifest to the stable website path", () => {
+    expect(publisherSource).toContain("Publish-WebsiteManifest");
+    expect(publisherSource).toContain("C:\\inetpub\\wwwroot\\manifests\\launcher\\android-latest.json");
+    expect(publisherSource).toContain("scp");
+    expect(publisherSource).toContain("icacls.exe `$target /reset");
   });
 });

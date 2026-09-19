@@ -34,6 +34,7 @@ public final class LauncherLogStore {
     private static final String PREFS_NAME = "crossingvoid_launcher_log";
     private static final String PREF_INSTALLATION_ID = "installation_id";
     private static final String PREF_LAST_AUTO_UPLOAD_ATTEMPT_AT = "last_auto_upload_attempt_at";
+    private static final String PREF_NETWORK_ACCESS_ALLOWED = "network_access_allowed";
     private static final String UPLOAD_URL = "https://www.crossingvoid.top/api/launcher-diagnostics/upload-log";
     private static final long AUTO_UPLOAD_DEBOUNCE_MS = 2_000L;
     private static final long AUTO_UPLOAD_MIN_INTERVAL_MS = 60_000L;
@@ -84,6 +85,9 @@ public final class LauncherLogStore {
     }
 
     public static JSONObject upload(Context context, String launcherVersion) throws IOException, JSONException {
+        if (!isNetworkAccessAllowed(context)) {
+            throw new IOException("当前启动器版本尚未通过验证，不能上传日志。");
+        }
         synchronized (UPLOAD_LOCK) {
             return uploadLocked(context, launcherVersion);
         }
@@ -145,6 +149,7 @@ public final class LauncherLogStore {
 
     private static void scheduleAutomaticUpload(Context context) {
         AUTO_UPLOAD_DIRTY.set(true);
+        if (!isNetworkAccessAllowed(context)) return;
         if (!AUTO_UPLOAD_PENDING.compareAndSet(false, true)) return;
 
         long now = System.currentTimeMillis();
@@ -155,6 +160,10 @@ public final class LauncherLogStore {
     }
 
     private static void runAutomaticUpload(Context context) {
+        if (!isNetworkAccessAllowed(context)) {
+            AUTO_UPLOAD_PENDING.set(false);
+            return;
+        }
         AUTO_UPLOAD_DIRTY.set(false);
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
@@ -168,6 +177,19 @@ public final class LauncherLogStore {
             AUTO_UPLOAD_PENDING.set(false);
             if (AUTO_UPLOAD_DIRTY.get()) scheduleAutomaticUpload(context);
         }
+    }
+
+    public static void setNetworkAccessAllowed(Context context, boolean allowed) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_NETWORK_ACCESS_ALLOWED, allowed)
+            .apply();
+        if (allowed && AUTO_UPLOAD_DIRTY.get()) scheduleAutomaticUpload(context.getApplicationContext());
+    }
+
+    public static boolean isNetworkAccessAllowed(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(PREF_NETWORK_ACCESS_ALLOWED, false);
     }
 
     private static String getLauncherVersion(Context context) {

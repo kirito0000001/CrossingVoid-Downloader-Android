@@ -161,6 +161,15 @@ public class AndroidLauncherPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setLauncherNetworkAccess(PluginCall call) {
+        boolean allowed = Boolean.TRUE.equals(call.getBoolean("allowed", false));
+        LauncherLogStore.setNetworkAccessAllowed(getContext(), allowed);
+        JSObject result = new JSObject();
+        result.put("allowed", allowed);
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void checkGame(PluginCall call) {
         String packageName = call.getString("packageName", DEFAULT_GAME_PACKAGE);
         JSObject result = new JSObject();
@@ -378,6 +387,42 @@ public class AndroidLauncherPlugin extends Plugin {
         serviceIntent.setAction(GameDownloadService.ACTION_IMPORT);
         serviceIntent.putExtra(GameDownloadService.EXTRA_PLAN, plan.toString());
         serviceIntent.putExtra(GameDownloadService.EXTRA_IMPORT_TREE_URI, treeUri.toString());
+        ContextCompat.startForegroundService(getContext(), serviceIntent);
+        JSObject response = new JSObject();
+        response.put("started", true);
+        call.resolve(response);
+    }
+
+    @PluginMethod
+    public void exportGameChunks(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+            | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(call, intent, "exportGameChunksResult");
+    }
+
+    @ActivityCallback
+    private void exportGameChunksResult(PluginCall call, ActivityResult result) {
+        Intent data = result.getData();
+        if (result.getResultCode() != Activity.RESULT_OK || data == null || data.getData() == null) {
+            call.reject("未选择导出文件夹。");
+            return;
+        }
+        Uri treeUri = data.getData();
+        int permissions = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+        try {
+            getContext().getContentResolver().takePersistableUriPermission(treeUri, permissions);
+        } catch (SecurityException ignored) {
+            // Some providers only grant access for this process; export starts immediately.
+        }
+        if (GameDownloadService.isRunning()) {
+            call.reject("请等待当前游戏下载任务结束后再导出。");
+            return;
+        }
+        Intent serviceIntent = new Intent(getContext(), GameDownloadService.class);
+        serviceIntent.setAction(GameDownloadService.ACTION_EXPORT);
+        serviceIntent.putExtra(GameDownloadService.EXTRA_EXPORT_TREE_URI, treeUri.toString());
         ContextCompat.startForegroundService(getContext(), serviceIntent);
         JSObject response = new JSObject();
         response.put("started", true);

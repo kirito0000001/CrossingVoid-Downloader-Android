@@ -2,7 +2,7 @@ import { CapacitorHttp } from "@capacitor/core";
 
 export const ANDROID_LAUNCHER_PRODUCT_KEY = "crossingvoid-launcher-android-installer";
 export const ANDROID_LAUNCHER_MANIFEST_URL =
-  "https://gitee.com/xiaojie578/CrossingVoid-Downloader-Android/raw/master/launcher/android-installer-latest.json";
+  "https://www.crossingvoid.top/manifests/launcher/android-latest.json";
 
 export type AndroidLauncherUpdateManifest = {
   schemaVersion: 1;

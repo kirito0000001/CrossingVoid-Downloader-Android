@@ -1,14 +1,15 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$VersionName,
-    [Parameter(Mandatory = $true)]
-    [int]$VersionCode,
     [string]$Notes = "零境启动器 Android 一次性安装器更新",
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$GiteeRepository = "xiaojie578/CrossingVoid-Downloader-Android",
     [string]$GiteeBranch = "master",
     [string]$GiteeAccessToken = "",
     [string]$OutputDir = "D:\启动器新包\AndroidInstaller",
+    [string]$ServerSshTarget = "crossing-server",
+    [string]$WebsiteManifestPath = "C:\inetpub\wwwroot\manifests\launcher\android-latest.json",
+    [switch]$RecoveryBuild,
     [switch]$SkipManifest,
     [switch]$ReplaceExistingAsset,
     [switch]$DryRun
@@ -25,8 +26,12 @@ $expectedSignerSha256 = "56f1b0b317e38985808ddd9ee03f3785a8c0190bf32ff2791ba6a3f
 $attachmentLimitBytes = 100MB
 
 function Write-Stage([string]$Stage, [double]$Percent, [string]$Message) {
-    $payload = [ordered]@{ stage = $Stage; percent = $Percent; message = $Message }
-    Write-Output ("::progress" + ($payload | ConvertTo-Json -Compress))
+    $payload = [ordered]@{ type = 'progress'; stage = $Stage; percent = $Percent; message = $Message }
+    Write-Output ("::axtools " + ($payload | ConvertTo-Json -Compress))
+}
+
+function Set-PublishCancellation([ValidateSet('stop','locked')][string]$Mode, [string]$Message) {
+    Write-Output ("::axtools " + ([ordered]@{ type='cancellation'; mode=$Mode; message=$Message } | ConvertTo-Json -Compress))
 }
 
 function Get-GiteeToken {
@@ -93,9 +98,7 @@ function Upload-ReleaseAsset([int]$ReleaseId, [string]$Path) {
             Write-Host "已存在同名同大小 APK，跳过上传：$($file.Name)" -ForegroundColor DarkGray
             return
         }
-        if (!$ReplaceExistingAsset) {
-            throw "Gitee 已存在同名但内容可能不同的 APK；确认覆盖时请使用 -ReplaceExistingAsset。"
-        }
+        Write-Stage "checkpoint-reset" 74 "断点 APK 不匹配，正在重新上传"
         Write-Host "删除 Gitee 上的同名旧 APK：$($file.Name)" -ForegroundColor Yellow
         Invoke-GiteeApi -Method Delete -Path ("releases/{0}/attach_files/{1}" -f $ReleaseId, $same[0].id) | Out-Null
     }
@@ -103,6 +106,25 @@ function Upload-ReleaseAsset([int]$ReleaseId, [string]$Path) {
     & curl.exe --fail-with-body --show-error --progress-bar --request POST `
         --form "access_token=$script:Token" --form "file=@$($file.FullName);filename=$($file.Name)" $uri
     if ($LASTEXITCODE -ne 0) { throw "Gitee APK 上传失败，curl exit code $LASTEXITCODE" }
+}
+
+function Test-PublishCheckpoint([string]$ApkPath, [string]$ManifestPath) {
+    if (!(Test-Path -LiteralPath $ApkPath -PathType Leaf) -or
+        !(Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+        return $false
+    }
+    try {
+        $checkpointManifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $checkpointApk = Get-Item -LiteralPath $ApkPath
+        $checkpointHash = (Get-FileHash -LiteralPath $ApkPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        return [string]$checkpointManifest.versionName -eq $VersionName -and
+            [string]$checkpointManifest.asset.fileName -eq $checkpointApk.Name -and
+            [int64]$checkpointManifest.asset.sizeBytes -eq $checkpointApk.Length -and
+            [string]$checkpointManifest.asset.sha256 -eq $checkpointHash
+    }
+    catch {
+        return $false
+    }
 }
 
 function Publish-RepositoryFile([string]$LocalPath, [string]$RepositoryPath) {
@@ -127,17 +149,75 @@ function Publish-RepositoryFile([string]$LocalPath, [string]$RepositoryPath) {
     }
 }
 
-if ($VersionCode -le 0) { throw "VersionCode 必须大于 0。" }
+function Publish-WebsiteManifest([string]$LocalPath) {
+    if (!(Test-Path -LiteralPath $LocalPath -PathType Leaf)) { throw "官网启动器清单不存在：$LocalPath" }
+    $remoteTempPath = "C:\Windows\Temp\crossingvoid-android-launcher-$([Guid]::NewGuid().ToString('N')).json"
+    & scp $LocalPath "${ServerSshTarget}:$remoteTempPath"
+    if ($LASTEXITCODE -ne 0) { throw "上传官网 Android 启动器清单失败，scp exit code $LASTEXITCODE" }
+    $remoteScript = @"
+`$ErrorActionPreference = 'Stop'
+`$temp = '$remoteTempPath'
+`$target = '$WebsiteManifestPath'
+try {
+    `$manifest = Get-Content -LiteralPath `$temp -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]`$manifest.productKey -ne '$productKey' -or [string]`$manifest.versionName -ne '$VersionName') {
+        throw '官网 Android 启动器清单内容不匹配'
+    }
+    `$targetDir = Split-Path -Parent `$target
+    New-Item -ItemType Directory -Path `$targetDir -Force | Out-Null
+    if (Test-Path -LiteralPath `$target -PathType Leaf) {
+        Copy-Item -LiteralPath `$target -Destination "`$target.bak" -Force
+    }
+    Move-Item -LiteralPath `$temp -Destination `$target -Force
+    & icacls.exe `$target /reset | Out-Null
+    if (`$LASTEXITCODE -ne 0) { throw '无法恢复官网清单的 IIS 读取权限' }
+}
+catch {
+    Remove-Item -LiteralPath `$temp -Force -ErrorAction SilentlyContinue
+    throw
+}
+"@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remoteScript))
+    & ssh $ServerSshTarget "powershell -NoProfile -EncodedCommand $encoded"
+    if ($LASTEXITCODE -ne 0) { throw "发布官网 Android 启动器清单失败，ssh exit code $LASTEXITCODE" }
+}
+
+$NormalVersionCode = 1
+$RecoveryVersionCode = 1001003
+$VersionCode = if ($RecoveryBuild) { $RecoveryVersionCode } else { $NormalVersionCode }
 if ($VersionName -notmatch '^\d+\.\d+\.\d+$') { throw "手机版启动器 VersionName 必须使用纯数字三段式：$VersionName" }
 $script:Token = if ($DryRun) { "dry-run" } else { Get-GiteeToken }
+$safeVersion = $VersionName -replace '[^A-Za-z0-9._-]', '_'
+$apkName = "CrossingVoidInstaller-$safeVersion-Android.apk"
+$publishedApk = Join-Path $OutputDir $apkName
+$manifestFileName = if ($SkipManifest) { "android-installer-$safeVersion.json" } else { "android-installer-latest.json" }
+$manifestPath = Join-Path $OutputDir $manifestFileName
+$hadCheckpointFiles = (Test-Path -LiteralPath $publishedApk -PathType Leaf) -or
+    (Test-Path -LiteralPath $manifestPath -PathType Leaf)
+$resumeCheckpoint = Test-PublishCheckpoint -ApkPath $publishedApk -ManifestPath $manifestPath
 
-Write-Stage "build" 5 "构建 Android 启动器"
+Set-PublishCancellation 'stop' '构建和上传阶段可停止；再次执行会从有效断点继续。'
+if ($resumeCheckpoint) {
+    Write-Stage "checkpoint-resume" 62 "检测到 $VersionName 有效发布断点，跳过 npm 和 Gradle 构建"
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $apk = Get-Item -LiteralPath $publishedApk
+    $sha256 = (Get-FileHash -LiteralPath $publishedApk -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+else {
+    $ReplaceExistingAsset = $true
+    if ($hadCheckpointFiles) {
+        Write-Stage "checkpoint-rebuild" 2 "发布断点校验失败，正在重新构建"
+    }
+
+Write-Stage "test" 5 "运行 Android 启动器前端测试"
 Push-Location $ProjectRoot
 try {
     & npm.cmd test
     if ($LASTEXITCODE -ne 0) { throw "前端测试失败。" }
+    Write-Stage "frontend" 15 "构建 Android 启动器前端"
     & npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw "前端构建失败。" }
+    Write-Stage "capacitor" 28 "同步 Capacitor Android 工程"
     & npx.cmd cap sync android
     if ($LASTEXITCODE -ne 0) { throw "Capacitor 同步失败。" }
 
@@ -151,6 +231,7 @@ try {
     $env:Path = "$javaHome\bin;$env:Path"
     Push-Location (Join-Path $ProjectRoot "android")
     try {
+        Write-Stage "gradle" 40 "构建 Android Release APK"
         & .\gradlew.bat assembleRelease "-PlauncherVersionName=$VersionName" "-PlauncherVersionCode=$VersionCode" --console=plain --no-daemon
         if ($LASTEXITCODE -ne 0) { throw "assembleRelease 失败。" }
     } finally {
@@ -171,6 +252,7 @@ $buildTools = Get-ChildItem (Join-Path $androidSdkRoot "build-tools") -Directory
 if ($null -eq $buildTools) { throw "没有找到 Android SDK build-tools。" }
 $aapt = Join-Path $buildTools.FullName "aapt.exe"
 $apkSigner = Join-Path $buildTools.FullName "apksigner.bat"
+Write-Stage "verify" 54 "校验 APK 包名、版本和签名"
 $badging = (& $aapt dump badging $sourceApk | Select-Object -First 1) -join ""
 if ($LASTEXITCODE -ne 0 -or $badging -notmatch "name='$([regex]::Escape($expectedPackageName))'") { throw "一次性安装器包名验证失败：$badging" }
 if ($badging -notmatch "versionCode='$VersionCode'" -or $badging -notmatch "versionName='$([regex]::Escape($VersionName))'") {
@@ -185,9 +267,6 @@ if ($actualSignerSha256 -ne $expectedSignerSha256) {
     throw "一次性安装器签名与游戏不一致：$actualSignerSha256"
 }
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-$safeVersion = $VersionName -replace '[^A-Za-z0-9._-]', '_'
-$apkName = "CrossingVoidInstaller-$safeVersion-Android.apk"
-$publishedApk = Join-Path $OutputDir $apkName
 Copy-Item -LiteralPath $sourceApk -Destination $publishedApk -Force
 
 $apk = Get-Item -LiteralPath $publishedApk
@@ -207,9 +286,9 @@ $manifest = [ordered]@{
         sha256 = $sha256
     }
 }
-$manifestFileName = if ($SkipManifest) { "android-installer-$safeVersion.json" } else { "android-installer-latest.json" }
-$manifestPath = Join-Path $OutputDir $manifestFileName
 $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+Write-Stage "package" 60 "APK 与更新清单已整理到 AX 工作区"
+}
 
 Write-Host "APK：$publishedApk"
 Write-Host "SHA256：$sha256"
@@ -224,9 +303,13 @@ $release = Ensure-Release -Tag $releaseTag -Title "零境启动器 Android Insta
 Write-Stage "upload" 78 "上传 Android 启动器 APK"
 Upload-ReleaseAsset -ReleaseId ([int]$release.id) -Path $publishedApk
 if (!$SkipManifest) {
+    Set-PublishCancellation 'locked' 'APK 已上传，正在提交最新版清单，不可停止。'
     Write-Stage "manifest" 94 "更新 Android 启动器版本清单"
     Publish-RepositoryFile -LocalPath $manifestPath -RepositoryPath $manifestRepositoryPath
+    Write-Stage "website" 97 "同步官网 Android 启动器清单"
+    Publish-WebsiteManifest -LocalPath $manifestPath
 }
 Write-Stage "completed" 100 "Android 启动器发布完成"
 Write-Host "Gitee Release：https://gitee.com/$GiteeRepository/releases/tag/$releaseTag"
 Write-Host "更新清单：https://gitee.com/$GiteeRepository/raw/$GiteeBranch/$manifestRepositoryPath"
+Write-Host "官网清单：https://www.crossingvoid.top/manifests/launcher/android-latest.json"

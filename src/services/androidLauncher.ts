@@ -57,7 +57,7 @@ export type LauncherLogUploadResult = {
 };
 
 export type NativeDownloadState = {
-  status: "idle" | "downloading" | "pausing" | "paused" | "cancelling" | "importing" | "verifying" | "merging" | "extracting" | "ready" | "error";
+  status: "idle" | "downloading" | "pausing" | "paused" | "cancelling" | "importing" | "exporting" | "verifying" | "merging" | "extracting" | "ready" | "error";
   message: string;
   version?: string;
   source?: "official" | "github";
@@ -80,6 +80,7 @@ type AndroidLauncherPlugin = {
   appendLauncherLog(options: { level: string; event: string; message: string; details?: string }): Promise<LauncherLogInfo>;
   getLauncherLogInfo(): Promise<LauncherLogInfo>;
   uploadLauncherLog(options: { launcherVersion: string }): Promise<LauncherLogUploadResult>;
+  setLauncherNetworkAccess(options: { allowed: boolean }): Promise<{ allowed: boolean }>;
   checkGame(options: { packageName: string }): Promise<AndroidGameInfo>;
   getGithubNetworkStatus(): Promise<NativeGithubNetworkStatus>;
   getLauncherPermissionStatus(): Promise<LauncherPermissionStatus>;
@@ -87,6 +88,7 @@ type AndroidLauncherPlugin = {
   openBatteryOptimizationSettings(): Promise<{ opened: boolean; directRequest: boolean }>;
   installDownloadedApk(): Promise<{ started: boolean }>;
   importGameChunks(options: { plan: AndroidDownloadPlan }): Promise<{ started: boolean }>;
+  exportGameChunks(): Promise<{ started: boolean }>;
   startDownload(options: { plan: AndroidDownloadPlan }): Promise<{ started: boolean }>;
   pauseDownload(): Promise<{ paused: boolean }>;
   cancelDownload(): Promise<{ cancelled: boolean }>;
@@ -129,6 +131,11 @@ export async function getLauncherLogInfo(): Promise<LauncherLogInfo> {
 export async function uploadLauncherLog(launcherVersion: string): Promise<LauncherLogUploadResult> {
   if (Capacitor.getPlatform() !== "android") throw new Error("日志上传只能在 Android 启动器中使用。");
   return plugin.uploadLauncherLog({ launcherVersion });
+}
+
+export async function setLauncherNetworkAccess(allowed: boolean) {
+  if (Capacitor.getPlatform() !== "android") return { allowed };
+  return plugin.setLauncherNetworkAccess({ allowed });
 }
 
 export async function checkAndroidGame(): Promise<AndroidGameInfo> {
@@ -181,6 +188,11 @@ export async function startGameDownload(plan: AndroidDownloadPlan) {
 export async function importGameChunks(plan: AndroidDownloadPlan) {
   if (Capacitor.getPlatform() !== "android") throw new Error("导入游戏碎片需要在 Android 启动器中运行");
   return plugin.importGameChunks({ plan });
+}
+
+export async function exportGameChunks() {
+  if (Capacitor.getPlatform() !== "android") throw new Error("导出游戏碎片需要在 Android 启动器中运行");
+  return plugin.exportGameChunks();
 }
 
 export async function pauseGameDownload() {

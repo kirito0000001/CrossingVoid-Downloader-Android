@@ -6,7 +6,7 @@ import {
 } from "../src/services/gameUpdate";
 
 describe("Android game update manifest", () => {
-  it("uses the single current Gitee manifest contract", () => {
+  it("uses the single current website manifest contract", () => {
     const update = parseAndroidUpdateCheckResponse({
       schemaVersion: 2,
       productKey: "crossingvoid-android-game",
@@ -47,7 +47,7 @@ describe("Android game update manifest", () => {
     ).toThrow("Android 游戏清单格式不受支持");
   });
 
-  it("accepts the Gitee-published game manifest without calling the OSS update API", () => {
+  it("accepts the website game manifest without calling the OSS update API", () => {
     const update = parseAndroidUpdateCheckResponse({
       schemaVersion: 2,
       productKey: "crossingvoid-android-game",
@@ -77,7 +77,7 @@ describe("Android game update manifest", () => {
     });
 
     expect(ANDROID_GAME_METADATA_MANIFEST_URL).toBe(
-      "https://gitee.com/xiaojie578/CrossingVoid-Downloader-Android/raw/master/game/android-latest.json",
+      "https://www.crossingvoid.top/manifests/game/android-latest.json",
     );
     expect(update.version).toBe("V0.5.12");
     expect(update.asset.chunks[0]?.fileName).toBe("CrossingVoid手机端.碎片001");

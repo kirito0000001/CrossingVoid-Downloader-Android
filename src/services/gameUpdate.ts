@@ -1,7 +1,7 @@
 import { CapacitorHttp } from "@capacitor/core";
 
 export const ANDROID_GAME_METADATA_MANIFEST_URL =
-  "https://gitee.com/xiaojie578/CrossingVoid-Downloader-Android/raw/master/game/android-latest.json";
+  "https://www.crossingvoid.top/manifests/game/android-latest.json";
 const PRODUCT_KEY = "crossingvoid-android-game";
 
 export type AndroidArchiveChunk = {

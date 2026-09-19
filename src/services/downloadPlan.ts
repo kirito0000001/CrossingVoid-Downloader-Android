@@ -27,6 +27,7 @@ export type LauncherDownloadPhase =
   | "updateReady"
   | "downloading"
   | "paused"
+  | "exporting"
   | "verifying"
   | "readyInstall"
   | "error";
@@ -87,6 +88,7 @@ export function launcherPhaseFromNativeState(status: string): LauncherDownloadPh
   if (status === "downloading") return "downloading";
   if (status === "pausing" || status === "cancelling") return "verifying";
   if (status === "paused") return "paused";
+  if (status === "exporting") return "exporting";
   if (["importing", "verifying", "merging", "extracting"].includes(status)) return "verifying";
   if (status === "ready") return "readyInstall";
   if (status === "error") return "error";

@@ -33,6 +33,7 @@ import {
   getLauncherLogInfo,
   getLauncherPermissionStatus,
   getLauncherUpdateState,
+  exportGameChunks,
   installDownloadedApk,
   importGameChunks,
   installLauncherUpdate,
@@ -41,6 +42,7 @@ import {
   pauseGameDownload,
   startGameDownload,
   startLauncherUpdate,
+  setLauncherNetworkAccess,
   uploadLauncherLog,
   type AndroidGameInfo,
   type AndroidLauncherInfo,
@@ -69,6 +71,7 @@ import {
   type AndroidLauncherUpdateManifest,
 } from "./services/launcherUpdate";
 import { writeLauncherLog } from "./services/launcherLog";
+import { canUseAndroidLauncherNetwork } from "./services/launcherNetworkPolicy";
 import {
   fetchTrafficQuotaStatus,
   type TrafficQuotaStatus,
@@ -85,6 +88,7 @@ type LauncherPhase =
   | "updateReady"
   | "downloading"
   | "paused"
+  | "exporting"
   | "verifying"
   | "readyInstall"
   | "installing"
@@ -115,10 +119,12 @@ const verifiedChunks = ref(0);
 const currentPageIndex = ref(1);
 const launcherUpdateCheckError = ref("");
 const launcherUpdateCheckCompleted = ref(false);
-const launcherAccessLocked = computed(() =>
-  !launcherUpdateCheckCompleted.value ||
-  Boolean(launcherUpdateCheckError.value) ||
-  ["launcherChecking", "launcherUpdateReady", "launcherUpdating", "launcherUpdateInstall", "launcherInstalling"].includes(phase.value),
+const launcherNetworkLocked = computed(() =>
+  !canUseAndroidLauncherNetwork(
+    launcherUpdateCheckCompleted.value,
+    launcherUpdateCheckError.value,
+    phase.value,
+  ),
 );
 const trafficQuota = ref<TrafficQuotaStatus | null>(null);
 const trafficQuotaPending = ref(false);
@@ -151,10 +157,15 @@ const activeDownloadSourceName = computed(() =>
   (activeDownloadSource.value || downloadSource.value) === "github" ? "Github 源" : "零境交错源",
 );
 const downloadSourceLocked = computed(() =>
-  isLauncherUpdatePhase.value || ["downloading", "verifying", "installing"].includes(phase.value),
+  isLauncherUpdatePhase.value || ["downloading", "exporting", "verifying", "installing"].includes(phase.value),
+);
+const canExportGameChunks = computed(() =>
+  ["ready", "error"].includes(nativeDownloadStatus.value) &&
+  totalChunks.value > 0 &&
+  verifiedChunks.value === totalChunks.value,
 );
 const showGlobalProgress = computed(() =>
-  ["launcherUpdating", "downloading", "paused", "verifying"].includes(phase.value),
+  ["launcherUpdating", "downloading", "paused", "exporting", "verifying"].includes(phase.value),
 );
 const progressAnimating = computed(() => showGlobalProgress.value && phase.value !== "paused");
 const progressDetailText = computed(() => {
@@ -162,6 +173,9 @@ const progressDetailText = computed(() => {
   if (totalChunks.value <= 0) return "准备下载";
   if (nativeDownloadStatus.value === "verifying") {
     return `已校验 ${Math.min(verifiedChunks.value, totalChunks.value)} / ${totalChunks.value} 片`;
+  }
+  if (nativeDownloadStatus.value === "exporting") {
+    return `正在导出第 ${Math.max(1, currentChunk.value)} / ${totalChunks.value} 项`;
   }
   if (["downloading", "paused"].includes(nativeDownloadStatus.value)) {
     return `第 ${Math.max(1, currentChunk.value)} / ${totalChunks.value} 片`;
@@ -303,6 +317,11 @@ async function handleOpenBatteryOptimizationSettings() {
 }
 
 async function uploadCurrentLauncherLog() {
+  if (launcherNetworkLocked.value) {
+    launcherLogUploadState.value = "error";
+    launcherLogUploadMessage.value = "请先更新到最新启动器后再上传日志";
+    return;
+  }
   if (launcherLogUploadState.value === "uploading") return;
   launcherLogUploadState.value = "uploading";
   launcherLogUploadMessage.value = "正在上传启动器日志";
@@ -345,6 +364,8 @@ const statusTitle = computed(() => {
       return `下载游戏中：${activeDownloadSourceName.value}`;
     case "paused":
       return `下载已暂停：${activeDownloadSourceName.value}`;
+    case "exporting":
+      return "导出已下载碎片";
     case "verifying":
       if (nativeDownloadStatus.value === "pausing") return "正在暂停下载";
       if (nativeDownloadStatus.value === "cancelling") return "正在取消下载";
@@ -385,7 +406,10 @@ const actionText = computed(() => {
       return "暂停下载";
     case "paused":
       return "继续下载";
+    case "exporting":
+      return "导出中";
     case "verifying":
+    case "exporting":
       return "校验中";
     case "readyInstall":
       return "安装游戏";
@@ -428,7 +452,7 @@ const actionIcon = computed(() => {
 });
 
 const primaryActionSpinning = computed(() =>
-  ["launcherChecking", "launcherUpdating", "launcherInstalling", "checking", "verifying", "installing"].includes(phase.value),
+  ["launcherChecking", "launcherUpdating", "launcherInstalling", "checking", "exporting", "verifying", "installing"].includes(phase.value),
 );
 
 const launcherUpdateStatusText = computed(() => {
@@ -450,7 +474,7 @@ const launcherUpdateButtonText = computed(() => {
 });
 
 const actionDisabled = computed(() =>
-  ["launcherChecking", "launcherUpdating", "launcherInstalling", "checking", "verifying", "installing"].includes(phase.value),
+  ["launcherChecking", "launcherUpdating", "launcherInstalling", "checking", "exporting", "verifying", "installing"].includes(phase.value),
 );
 
 async function waitForNativeDownloadStatus(
@@ -589,6 +613,7 @@ function applyLauncherUpdateState(state: NativeLauncherUpdateState) {
 }
 
 async function checkLauncherUpdate(): Promise<boolean> {
+  await setLauncherNetworkAccess(false);
   phase.value = "launcherChecking";
   launcherUpdateCheckError.value = "";
   launcherUpdateCheckCompleted.value = false;
@@ -612,7 +637,10 @@ async function checkLauncherUpdate(): Promise<boolean> {
     const latest = await checkLatestAndroidLauncher();
     launcherTargetVersionName.value = latest?.versionName || "";
     launcherUpdateCheckCompleted.value = true;
-    if (!latest || !shouldInstallLauncherUpdate(installedLauncher.versionCode, installedLauncher.versionName, latest)) return false;
+    if (!latest || !shouldInstallLauncherUpdate(installedLauncher.versionCode, installedLauncher.versionName, latest)) {
+      await setLauncherNetworkAccess(true);
+      return false;
+    }
 
     launcherUpdateInfo.value = latest;
     phase.value = "launcherUpdateReady";
@@ -677,6 +705,7 @@ async function refreshAllStatus() {
 }
 
 async function refreshTrafficQuota() {
+  if (launcherNetworkLocked.value) return;
   if (trafficQuotaPending.value) return;
   trafficQuotaPending.value = true;
   try {
@@ -691,6 +720,7 @@ async function refreshTrafficQuota() {
 }
 
 async function refreshGithubNetworkStatus() {
+  if (launcherNetworkLocked.value) return;
   if (githubNetworkPending.value) return;
   githubNetworkPending.value = true;
   try {
@@ -793,7 +823,7 @@ function handleTouchEnd(event: TouchEvent) {
 }
 
 async function handlePrimaryAction() {
-  if (launcherAccessLocked.value && !["launcherUpdateReady", "launcherUpdateInstall"].includes(phase.value)) {
+  if (launcherNetworkLocked.value && !["launcherUpdateReady", "launcherUpdateInstall"].includes(phase.value)) {
     if (launcherUpdateCheckError.value) await refreshAllStatus();
     return;
   }
@@ -930,6 +960,19 @@ async function importGameChunksFromDevice() {
   }
 }
 
+async function exportGameChunksFromDevice() {
+  if (!canExportGameChunks.value) return;
+  try {
+    phase.value = "exporting";
+    statusMessage.value = "请选择用于保存恢复文件的文件夹";
+    await exportGameChunks();
+  } catch (error) {
+    phase.value = "error";
+    statusMessage.value = error instanceof Error ? error.message : "无法导出已下载碎片";
+    reportFailure("export-game-chunks", error);
+  }
+}
+
 watch(downloadSource, (source) => {
   saveAndroidDownloadSource(source);
   void writeLauncherLog("info", "settings.download-source", source);
@@ -992,18 +1035,21 @@ function handleVisibilityChange() {
 }
 
 onMounted(async () => {
+  await setLauncherNetworkAccess(false);
   await writeLauncherLog("info", "app.mounted", "Launcher view mounted");
   await refreshLauncherLogInfo();
   progressListener = await addDownloadProgressListener(applyNativeState);
   launcherProgressListener = await addLauncherUpdateProgressListener(applyLauncherUpdateState);
   document.addEventListener("visibilitychange", handleVisibilityChange);
-  await Promise.all([
-    refreshAllStatus(),
-    refreshTrafficQuota(),
-    refreshLauncherPermissionStatus(),
-    ...(downloadSource.value === "github" ? [refreshGithubNetworkStatus()] : []),
-  ]);
-  trafficQuotaRefreshTimer = window.setInterval(() => void refreshTrafficQuota(), 5 * 60 * 1000);
+  await refreshLauncherPermissionStatus();
+  await refreshAllStatus();
+  if (!launcherNetworkLocked.value) {
+    await Promise.all([
+      refreshTrafficQuota(),
+      ...(downloadSource.value === "github" ? [refreshGithubNetworkStatus()] : []),
+    ]);
+    trafficQuotaRefreshTimer = window.setInterval(() => void refreshTrafficQuota(), 5 * 60 * 1000);
+  }
   await writeLauncherLog("info", "app.ready", "Launcher status initialized", {
     launcherVersion: launcherVersionText.value,
     gameVersion: gameVersionText.value,
@@ -1093,6 +1139,7 @@ onBeforeUnmount(() => {
                 <div class="setting-copy"><strong>游戏管理</strong><span>{{ gameManagementHint }}</span></div>
                 <div class="setting-actions">
                   <button type="button" :disabled="['installing', 'readyInstall'].includes(phase)" @click="importGameChunksFromDevice"><HardDriveDownload :size="22" />导入游戏碎片</button>
+                  <button type="button" :disabled="!canExportGameChunks" @click="exportGameChunksFromDevice"><UploadCloud :size="22" />导出已下载碎片</button>
                   <button v-if="gameManagementAction" class="danger-action" type="button" @click="handleGameManagementAction">
                     <component :is="gameManagementIcon" :size="22" />{{ gameManagementButtonText }}
                   </button>
@@ -1114,7 +1161,7 @@ onBeforeUnmount(() => {
                   <strong>日志与诊断</strong>
                   <span :class="{ warning: launcherLogUploadState === 'error' }">{{ launcherLogStatusText }}</span>
                 </div>
-                <button type="button" :disabled="launcherLogUploadState === 'uploading' || !launcherLogInfo?.hasLog" @click="uploadCurrentLauncherLog">
+                <button type="button" :disabled="launcherNetworkLocked || launcherLogUploadState === 'uploading' || !launcherLogInfo?.hasLog" @click="uploadCurrentLauncherLog">
                   <UploadCloud :size="22" />{{ launcherLogButtonText }}
                 </button>
               </section>

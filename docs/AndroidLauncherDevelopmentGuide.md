@@ -141,7 +141,7 @@ android/app/src/main/java/com/lingjing/launcher/android/ApkPackageValidator.java
 每次启动必须按这个顺序：
 
 1. 读取本机启动器版本和未完成任务。
-2. 检查 Gitee 启动器更新清单。
+2. 检查官网启动器更新清单。
 3. 如果发现启动器更新，停止后续游戏检查，先完成启动器更新。
 4. 启动器无更新后，调用服务器检查游戏版本。
 5. 读取本机游戏/安装器状态和未完成游戏下载。
@@ -154,7 +154,7 @@ android/app/src/main/java/com/lingjing/launcher/android/ApkPackageValidator.java
 Android 启动器清单：
 
 ```text
-https://gitee.com/xiaojie578/CrossingVoid-Downloader-Android/raw/master/launcher/android-installer-latest.json
+https://www.crossingvoid.top/manifests/launcher/android-latest.json
 ```
 
 清单核心字段：
@@ -178,7 +178,7 @@ https://gitee.com/xiaojie578/CrossingVoid-Downloader-Android/raw/master/launcher
 
 更新流程：下载 APK -> 校验大小 -> 校验 SHA-256 -> 校验包名/版本/签名 -> 检查未知来源安装权限 -> 打开系统安装器 -> 用户确认覆盖。
 
-Gitee 仓库只保存启动器 APK 和清单，不保存游戏本体。
+官网保存启动器 latest 清单；Gitee Release 保存启动器 APK，不保存游戏本体。
 
 ## 7. 游戏更新来源
 
@@ -187,7 +187,7 @@ Gitee 仓库只保存启动器 APK 和清单，不保存游戏本体。
 游戏更新通过：
 
 ```text
-POST https://www.crossingvoid.top/api/toolbox-updates/check
+GET https://www.crossingvoid.top/manifests/game/android-latest.json
 ```
 
 Android 产品键：
@@ -196,7 +196,7 @@ Android 产品键：
 crossingvoid-android-game
 ```
 
-Gitee 权威清单提供版本、Release 标签、完整包 SHA-256、总大小和 500 MiB 分片列表。
+官网权威清单提供版本、Release 标签、完整包 SHA-256、总大小和 500 MiB 分片列表。
 
 ### 7.2 OSS 官方源
 
@@ -402,10 +402,10 @@ cd android
 发布优先使用统一脚本：
 
 ```powershell
-.\Scripts\Publish-AndroidLauncher.ps1 -VersionName 1.0.25 -VersionCode 1 -Notes "更新说明"
+.\Scripts\Publish-AndroidLauncher.ps1 -VersionName 1.0.25 -Notes "更新说明"
 ```
 
-脚本必须完成：测试、Web 构建、Capacitor 同步、Gradle Release、包名检查、版本检查、签名检查、SHA-256、Gitee Release 上传和 latest 清单提交。
+脚本必须完成：测试、Web 构建、Capacitor 同步、Gradle Release、包名检查、版本检查、签名检查、SHA-256、Gitee Release 上传，以及官网 latest 清单原子同步。
 
 ## 16. 仓库职责
 
@@ -425,7 +425,7 @@ xiaojie578/CrossingVoid-Downloader-Android
 
 保存：
 
-- `launcher/android-installer-latest.json`
+- `launcher/android-installer-latest.json`（发布留档，不再作为客户端查询地址）
 - Android 启动器 Release
 - APK Release 附件
 
@@ -441,7 +441,7 @@ xiaojie578/CrossingVoid-Downloader-PC
 
 ## 17. 官网 Android 下载
 
-官网按钮应读取 Android Gitee 仓库的最新 `android-installer-v*` Release 或 `android-installer-latest.json`，弹出系统确认：
+官网按钮应读取本站 `/manifests/launcher/android-latest.json`，再使用清单中的 Gitee Release APK 地址。
 
 ```text
 安卓启动器正在测试中，是否下载？
@@ -467,9 +467,9 @@ xiaojie578/CrossingVoid-Downloader-PC
 
 检查电池优化、厂商后台限制、前台服务状态、WakeLock、任务持久化和 `START_REDELIVER_INTENT`。
 
-### Gitee 更新很慢或静默失败
+### 版本清单无法读取
 
-检查 Raw 清单 HTTP 状态、JSON 日期格式、Release 附件 URL 和中文编码。Gitee 只保存权威 JSON 清单，500 MiB 游戏分片存放在 Github 与 OSS。上传使用 PowerShell 7/UTF-8 或 `curl.exe`，并输出 HTTP 响应正文。
+检查 `crossingvoid.top/manifests` 的 HTTP 状态、JSON 日期格式、Release 附件 URL 和中文编码。Gitee Raw 不再承担版本接口；500 MiB 游戏分片仍存放在 Github 与 OSS。
 
 ### `aapt` 无法读取中文路径 APK
 
