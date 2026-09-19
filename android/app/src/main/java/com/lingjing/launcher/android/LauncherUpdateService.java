@@ -319,7 +319,7 @@ public class LauncherUpdateService extends Service {
     }
 
     public static void clearAll(Context context) {
-        deleteRecursively(getUpdateRoot(context));
+        DownloadFileUtils.deleteRecursively(getUpdateRoot(context));
         context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply();
     }
 
@@ -337,15 +337,8 @@ public class LauncherUpdateService extends Service {
         File[] files = root.listFiles();
         if (files == null) return;
         for (File file : files) {
-            if (!file.equals(partial) && !file.equals(complete)) deleteRecursively(file);
+            if (!file.equals(partial) && !file.equals(complete)) DownloadFileUtils.deleteRecursively(file);
         }
-    }
-
-    private static void deleteRecursively(File file) {
-        if (file == null || !file.exists()) return;
-        File[] children = file.listFiles();
-        if (children != null) for (File child : children) deleteRecursively(child);
-        file.delete();
     }
 
     private static final class CancelledException extends Exception {
