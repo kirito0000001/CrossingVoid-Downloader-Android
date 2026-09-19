@@ -71,6 +71,9 @@ dependencies {
     implementation "androidx.documentfile:documentfile:1.0.1"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // 本地 JVM 测试里 android.jar 的 org.json 是空壳（方法一调用就抛 not mocked），
+    // 这里放一份真实实现，让清单解析可以在不启动模拟器的情况下被测试。
+    testImplementation "org.json:json:20240303"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
