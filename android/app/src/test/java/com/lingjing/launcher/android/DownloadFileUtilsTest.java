@@ -11,6 +11,7 @@ import org.junit.rules.TemporaryFolder;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Locale;
 
 public class DownloadFileUtilsTest {
     @Rule
@@ -93,5 +94,16 @@ public class DownloadFileUtilsTest {
         DownloadFileUtils.deleteRecursively(null);
 
         assertFalse(root.exists());
+    }
+
+    @Test
+    public void comparesHashesCaseInsensitively() throws Exception {
+        File file = temporaryFolder.newFile("payload.bin");
+        Files.write(file.toPath(), "CrossingVoid".getBytes(StandardCharsets.UTF_8));
+        String hash = DownloadFileUtils.sha256(file);
+
+        assertTrue(DownloadFileUtils.hashMatches(file, hash));
+        assertTrue(DownloadFileUtils.hashMatches(file, hash.toUpperCase(Locale.ROOT)));
+        assertFalse(DownloadFileUtils.hashMatches(file, "0".repeat(64)));
     }
 }

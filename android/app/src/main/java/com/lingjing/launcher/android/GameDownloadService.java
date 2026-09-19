@@ -280,7 +280,7 @@ public class GameDownloadService extends Service {
             DocumentFile root = DocumentFile.fromTreeUri(this, treeUri);
             if (root == null || !root.isDirectory()) throw new IOException("无法读取选择的游戏碎片文件夹。");
             List<DocumentFile> sourceFiles = new ArrayList<>();
-            collectChunkDocuments(root, sourceFiles);
+            collectChunkDocuments(activePlan, root, sourceFiles);
             if (sourceFiles.isEmpty()) {
                 terminalPrepared = importPreparedRecoveryFiles(root, activePlan, downloadsRoot);
                 terminalStatus = "ready";
@@ -292,10 +292,10 @@ public class GameDownloadService extends Service {
             for (DocumentFile sourceFile : sourceFiles) {
                 checkControlSignals();
                 String name = sourceFile.getName();
-                DownloadChunk chunk = findChunkByName(name);
+                DownloadChunk chunk = findChunkByName(activePlan, name);
                 if (chunk == null) continue;
                 File destination = new File(chunksDir, chunk.fileName);
-                if (destination.length() == chunk.sizeBytes && hashMatches(destination, chunk.sha256)) {
+                if (destination.length() == chunk.sizeBytes && DownloadFileUtils.hashMatches(destination, chunk.sha256)) {
                     continue;
                 }
                 DownloadFileUtils.deleteFile(destination);
@@ -369,7 +369,7 @@ public class GameDownloadService extends Service {
     private boolean allChunksAvailable(DownloadPlan plan, File chunksDir) throws IOException {
         for (DownloadChunk chunk : plan.chunks) {
             File source = new File(chunksDir, chunk.fileName);
-            if (source.length() != chunk.sizeBytes || !hashMatches(source, chunk.sha256)) return false;
+            if (source.length() != chunk.sizeBytes || !DownloadFileUtils.hashMatches(source, chunk.sha256)) return false;
         }
         return true;
     }
@@ -632,19 +632,19 @@ public class GameDownloadService extends Service {
         saveAndBroadcastState(state);
     }
 
-    private void collectChunkDocuments(DocumentFile directory, List<DocumentFile> result) {
+    private void collectChunkDocuments(DownloadPlan plan, DocumentFile directory, List<DocumentFile> result) {
         for (DocumentFile child : directory.listFiles()) {
             if (child.isDirectory()) {
-                collectChunkDocuments(child, result);
-            } else if (child.isFile() && findChunkByName(child.getName()) != null) {
+                collectChunkDocuments(plan, child, result);
+            } else if (child.isFile() && findChunkByName(plan, child.getName()) != null) {
                 result.add(child);
             }
         }
     }
 
-    private DownloadChunk findChunkByName(String name) {
+    private DownloadChunk findChunkByName(DownloadPlan plan, String name) {
         if (name == null || !name.matches("^CrossingVoid手机端\\.碎片\\d{3}$")) return null;
-        for (DownloadChunk chunk : activePlan.chunks) {
+        for (DownloadChunk chunk : plan.chunks) {
             if (chunk.fileName.equals(name)) return chunk;
         }
         return null;
@@ -697,7 +697,7 @@ public class GameDownloadService extends Service {
         int count = 0;
         for (DownloadChunk chunk : plan.chunks) {
             File file = new File(chunksDir, chunk.fileName);
-            if (file.length() == chunk.sizeBytes && hashMatches(file, chunk.sha256)) count++;
+            if (file.length() == chunk.sizeBytes && DownloadFileUtils.hashMatches(file, chunk.sha256)) count++;
         }
         return count;
     }
@@ -711,7 +711,7 @@ public class GameDownloadService extends Service {
             if (position < verifiedChunks && file.length() == chunk.sizeBytes) {
                 continue;
             }
-            if (file.length() == chunk.sizeBytes && hashMatches(file, chunk.sha256)) {
+            if (file.length() == chunk.sizeBytes && DownloadFileUtils.hashMatches(file, chunk.sha256)) {
                 verifiedChunks = position + 1;
                 publishDownloadProgress("已校验第 " + chunk.index + " / " + chunk.count + " 片", true);
                 continue;
@@ -729,7 +729,7 @@ public class GameDownloadService extends Service {
                         throw new IOException("第 " + chunk.index + " 片大小不正确");
                     }
                     publishState("verifying", "正在校验第 " + chunk.index + " / " + chunk.count + " 片", downloadedBytes(), currentPercent(), chunk.index, true, null);
-                    if (!hashMatches(file, chunk.sha256)) {
+                    if (!DownloadFileUtils.hashMatches(file, chunk.sha256)) {
                         DownloadFileUtils.deleteFile(file);
                         throw new IOException("第 " + chunk.index + " 片校验失败");
                     }
@@ -907,10 +907,6 @@ public class GameDownloadService extends Service {
         }
         long required = DownloadFileUtils.requiredFreeBytes(plan.totalBytes);
         return Math.max(256L * 1024L * 1024L, required - existingChunkBytes);
-    }
-
-    private boolean hashMatches(File file, String expected) throws IOException {
-        return DownloadFileUtils.sha256(file).equalsIgnoreCase(expected);
     }
 
     private void checkControlSignals() throws PausedException, CancelledException {

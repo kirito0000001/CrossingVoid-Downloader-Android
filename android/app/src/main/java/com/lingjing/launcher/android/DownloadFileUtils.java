@@ -40,6 +40,10 @@ final class DownloadFileUtils {
         return true;
     }
 
+    static boolean hashMatches(File file, String expected) throws IOException {
+        return sha256(file).equalsIgnoreCase(expected);
+    }
+
     static String sha256(File file) throws IOException {
         MessageDigest digest;
         try {
