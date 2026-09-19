@@ -244,43 +244,17 @@ public class LauncherUpdateService extends Service {
         if (candidate == null || !getPackageName().equals(candidate.packageName)) {
             throw new IOException("启动器安装包包名不正确");
         }
-        if (packageVersionCode(candidate) != plan.versionCode) {
+        if (LauncherUpdateVerifier.packageVersionCode(candidate) != plan.versionCode) {
             throw new IOException("启动器安装包 versionCode 不正确");
         }
 
         PackageInfo installed = packageManager.getPackageInfo(getPackageName(), flags);
-        Signature[] installedSignatures = packageSignatures(installed);
-        Signature[] candidateSignatures = packageSignatures(candidate);
+        Signature[] installedSignatures = LauncherUpdateVerifier.packageSignatures(installed);
+        Signature[] candidateSignatures = LauncherUpdateVerifier.packageSignatures(candidate);
         if (installedSignatures.length == 0 || candidateSignatures.length == 0 ||
-            !sameSignatures(installedSignatures, candidateSignatures)) {
+            !LauncherUpdateVerifier.sameSignatures(installedSignatures, candidateSignatures)) {
             throw new IOException("启动器安装包签名不一致");
         }
-    }
-
-    private static long packageVersionCode(PackageInfo packageInfo) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) return packageInfo.getLongVersionCode();
-        return packageInfo.versionCode;
-    }
-
-    private static Signature[] packageSignatures(PackageInfo packageInfo) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            if (packageInfo.signingInfo == null) return new Signature[0];
-            return packageInfo.signingInfo.hasMultipleSigners()
-                ? packageInfo.signingInfo.getApkContentsSigners()
-                : packageInfo.signingInfo.getSigningCertificateHistory();
-        }
-        return packageInfo.signatures == null ? new Signature[0] : packageInfo.signatures;
-    }
-
-    private static boolean sameSignatures(Signature[] left, Signature[] right) {
-        if (left.length != right.length) return false;
-        String[] leftValues = new String[left.length];
-        String[] rightValues = new String[right.length];
-        for (int index = 0; index < left.length; index++) leftValues[index] = left[index].toCharsString();
-        for (int index = 0; index < right.length; index++) rightValues[index] = right[index].toCharsString();
-        Arrays.sort(leftValues);
-        Arrays.sort(rightValues);
-        return Arrays.equals(leftValues, rightValues);
     }
 
     private void publishReady(UpdatePlan plan, File apk) {
@@ -315,33 +289,13 @@ public class LauncherUpdateService extends Service {
         String targetVersionName = state.optString("versionName", "").trim();
         boolean newerCodeInstalled = currentVersionCode > targetVersionCode;
         boolean equalCodeInstalled = currentVersionCode == targetVersionCode &&
-            (targetVersionName.isBlank() || compareVersionNames(currentVersionName, targetVersionName) >= 0);
+            (targetVersionName.isBlank() || LauncherUpdateVerifier.compareVersionNames(currentVersionName, targetVersionName) >= 0);
         if (targetVersionCode > 0 && (newerCodeInstalled || equalCodeInstalled)) {
             clearAll(context);
             state = idleState();
             publishState(context, state);
         }
         return state;
-    }
-
-    private static int compareVersionNames(String left, String right) {
-        String[] leftParts = (left == null ? "" : left).split("\\.");
-        String[] rightParts = (right == null ? "" : right).split("\\.");
-        int count = Math.max(leftParts.length, rightParts.length);
-        for (int index = 0; index < count; index++) {
-            int leftValue = index < leftParts.length ? parseVersionPart(leftParts[index]) : 0;
-            int rightValue = index < rightParts.length ? parseVersionPart(rightParts[index]) : 0;
-            if (leftValue != rightValue) return Integer.compare(leftValue, rightValue);
-        }
-        return 0;
-    }
-
-    private static int parseVersionPart(String value) {
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException ignored) {
-            return 0;
-        }
     }
 
     public static JSONObject readState(Context context) {
