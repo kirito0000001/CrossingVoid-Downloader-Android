@@ -62,7 +62,6 @@ public class GameDownloadService extends Service {
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static final AtomicBoolean PAUSE_REQUESTED = new AtomicBoolean(false);
     private static final AtomicBoolean CANCEL_REQUESTED = new AtomicBoolean(false);
-    private static final Object STATE_LOCK = new Object();
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private long lastStateAt;
@@ -809,12 +808,6 @@ public class GameDownloadService extends Service {
         }
     }
 
-    private static void copyPreparedStateFields(JSONObject target, JSONObject source) throws JSONException {
-        for (String key : new String[] { "apkPath", "obbPath", "obbFileName", "installToken" }) {
-            if (source.has(key)) target.put(key, source.optString(key));
-        }
-    }
-
     private void updateTransferRate(String status, long downloadedBytes, long now) {
         if (!status.equals("downloading")) {
             bytesPerSecond = 0.0;
@@ -838,122 +831,49 @@ public class GameDownloadService extends Service {
         writeStateAndBroadcast(this, state);
     }
 
-    private static void writeStateAndBroadcast(Context context, JSONObject state) {
-        String json = state.toString();
-        synchronized (STATE_LOCK) {
-            LauncherStorage.prefs(context).edit().putString(LauncherStorage.PREF_STATE, json).apply();
-        }
-        Intent update = new Intent(ACTION_STATE);
-        update.setPackage(context.getPackageName());
-        update.putExtra(EXTRA_STATE, json);
-        context.sendBroadcast(update);
-    }
-
     public static JSONObject readStateObject(Context context) {
-        synchronized (STATE_LOCK) {
-            String json = LauncherStorage.prefs(context).getString(LauncherStorage.PREF_STATE, "");
-            if (json == null || json.isBlank()) {
-                return idleState();
-            }
-            try {
-                return new JSONObject(json);
-            } catch (JSONException ignored) {
-                return errorState("下载状态文件已损坏，请重新开始下载。");
-            }
-        }
+        return DownloadStateStore.readStateObject(context);
     }
-
     public static boolean isRunning() {
         return RUNNING.get();
     }
 
     public static String getManagedVersion(Context context) {
-        return LauncherStorage.prefs(context).getString(LauncherStorage.PREF_MANAGED_VERSION, "");
+        return DownloadStateStore.getManagedVersion(context);
     }
-
     public static void clearManagedVersion(Context context) {
-        LauncherStorage.prefs(context).edit().remove(LauncherStorage.PREF_MANAGED_VERSION).apply();
+        DownloadStateStore.clearManagedVersion(context);
     }
-
     public static boolean completeInstallation(Context context, String installToken) {
-        JSONObject state = readStateObject(context);
-        if (installToken == null || !installToken.equals(state.optString("installToken"))) {
-            return false;
-        }
-        String version = state.optString("version", "");
-        DownloadFileUtils.deleteRecursively(new File(LauncherStorage.downloadsRoot(context), "prepared"));
-        LauncherStorage.prefs(context).edit()
-            .remove(LauncherStorage.PREF_STATE)
-            .remove(LauncherStorage.PREF_PLAN)
-            .putString(LauncherStorage.PREF_MANAGED_VERSION, version)
-            .apply();
-        JSONObject completed = idleState();
-        try {
-            completed.put("message", "游戏资源安装完成");
-        } catch (JSONException ignored) {
-        }
-        writeStateAndBroadcast(context, completed);
-        return true;
+        return DownloadStateStore.completeInstallation(context, installToken);
     }
-
     public static boolean failInstallation(Context context, String installToken, String failureMessage) {
-        JSONObject state = readStateObject(context);
-        if (installToken == null || !installToken.equals(state.optString("installToken"))) {
-            return false;
-        }
-        try {
-            state.put("status", "error");
-            state.put("message", failureMessage == null || failureMessage.isBlank()
-                ? "游戏资源安装失败。"
-                : failureMessage);
-            state.put("canPause", false);
-            state.put("updatedAt", System.currentTimeMillis());
-        } catch (JSONException error) {
-            return false;
-        }
-        writeStateAndBroadcast(context, state);
-        return true;
+        return DownloadStateStore.failInstallation(context, installToken, failureMessage);
     }
-
     @Override
     public void onTimeout(int startId, int fgsType) {
         PAUSE_REQUESTED.set(true);
         super.onTimeout(startId, fgsType);
     }
 
-    public static void clearAllDownloads(Context context) {
-        DownloadFileUtils.deleteRecursively(LauncherStorage.downloadsRoot(context));
-        LauncherStorage.prefs(context).edit()
-            .remove(LauncherStorage.PREF_STATE)
-            .remove(LauncherStorage.PREF_PLAN)
-            .apply();
-    }
-
     private static JSONObject idleState() {
-        JSONObject state = new JSONObject();
-        try {
-            state.put("status", "idle");
-            state.put("message", "等待下载");
-            state.put("downloadedBytes", 0L);
-            state.put("totalBytes", 0L);
-            state.put("percent", 0.0);
-            state.put("currentChunk", 0);
-            state.put("totalChunks", 0);
-            state.put("verifiedChunks", 0);
-            state.put("canPause", false);
-        } catch (JSONException ignored) {
-        }
-        return state;
+        return DownloadStateStore.idleState();
     }
 
     private static JSONObject errorState(String message) {
-        JSONObject state = idleState();
-        try {
-            state.put("status", "error");
-            state.put("message", message);
-        } catch (JSONException ignored) {
-        }
-        return state;
+        return DownloadStateStore.errorState(message);
+    }
+
+    private static void writeStateAndBroadcast(Context context, JSONObject state) {
+        DownloadStateStore.writeStateAndBroadcast(context, state);
+    }
+
+    private static void copyPreparedStateFields(JSONObject target, JSONObject source) throws JSONException {
+        DownloadStateStore.copyPreparedStateFields(target, source);
+    }
+
+    public static void clearAllDownloads(Context context) {
+        DownloadStateStore.clearAllDownloads(context);
     }
 
     private long downloadedBytes() {
