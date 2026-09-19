@@ -63,7 +63,7 @@ describe("native Android game download integration", () => {
     expect(pluginSource).toContain("takePersistableUriPermission");
     expect(downloadServiceSource).toContain("ACTION_EXPORT");
     expect(downloadServiceSource).toContain("EXTRA_EXPORT_TREE_URI");
-    expect(downloadServiceSource).toContain("getString(PREF_PLAN");
+    expect(downloadServiceSource).toContain("getString(LauncherStorage.PREF_PLAN");
     expect(downloadServiceSource).toContain('publishState("exporting"');
     expect(downloadServiceSource).toContain(".exporting");
     expect(downloadServiceSource).toContain("sha256(tempFile)");
@@ -83,7 +83,7 @@ describe("native Android game download integration", () => {
   it("redelivers active foreground tasks after Android reclaims the process", () => {
     expect(downloadServiceSource).toContain("return START_REDELIVER_INTENT;");
     expect(launcherUpdateServiceSource).toContain("return START_REDELIVER_INTENT;");
-    expect(downloadServiceSource).toContain("getString(PREF_PLAN");
+    expect(downloadServiceSource).toContain("getString(LauncherStorage.PREF_PLAN");
     expect(launcherUpdateServiceSource).toContain("getString(PREF_PLAN");
   });
 
