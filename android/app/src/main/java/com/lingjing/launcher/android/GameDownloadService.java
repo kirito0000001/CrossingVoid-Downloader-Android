@@ -55,10 +55,6 @@ public class GameDownloadService extends Service {
     public static final String EXTRA_IMPORT_TREE_URI = "importTreeUri";
     public static final String EXTRA_EXPORT_TREE_URI = "exportTreeUri";
 
-    private static final String PREFS_NAME = "crossingvoid_download";
-    private static final String PREF_STATE = "state";
-    private static final String PREF_PLAN = "plan";
-    private static final String PREF_MANAGED_VERSION = "managedVersion";
     private static final int MAX_ATTEMPTS = 3;
     private static final long STATE_INTERVAL_MS = 350L;
     private static final String RECOVERY_MANIFEST_FILE = "零境启动器恢复信息.json";
@@ -131,7 +127,7 @@ public class GameDownloadService extends Service {
 
         if (ACTION_EXPORT.equals(action)) {
             String exportTreeUri = intent == null ? null : intent.getStringExtra(EXTRA_EXPORT_TREE_URI);
-            String exportPlan = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_PLAN, "");
+            String exportPlan = LauncherStorage.prefs(this).getString(LauncherStorage.PREF_PLAN, "");
             JSONObject previousState = readStateObject(this);
             String previousStatus = previousState.optString("status");
             boolean exportableState = "ready".equals(previousStatus)
@@ -170,7 +166,7 @@ public class GameDownloadService extends Service {
             }
             PAUSE_REQUESTED.set(false);
             CANCEL_REQUESTED.set(false);
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_PLAN, importPlan).apply();
+            LauncherStorage.prefs(this).edit().putString(LauncherStorage.PREF_PLAN, importPlan).apply();
             notifier.startForeground(0);
             executor.execute(() -> runImport(importPlan, Uri.parse(importTreeUri), startId));
             return START_NOT_STICKY;
@@ -178,7 +174,7 @@ public class GameDownloadService extends Service {
 
         String planJson = intent == null ? null : intent.getStringExtra(EXTRA_PLAN);
         if (planJson == null || planJson.isBlank()) {
-            planJson = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_PLAN, "");
+            planJson = LauncherStorage.prefs(this).getString(LauncherStorage.PREF_PLAN, "");
         }
         if (planJson == null || planJson.isBlank()) {
             saveAndBroadcastState(errorState("没有可恢复的下载任务。"));
@@ -191,7 +187,7 @@ public class GameDownloadService extends Service {
         }
         PAUSE_REQUESTED.set(false);
         CANCEL_REQUESTED.set(false);
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_PLAN, planJson).apply();
+        LauncherStorage.prefs(this).edit().putString(LauncherStorage.PREF_PLAN, planJson).apply();
         notifier.startForeground(0);
         String finalPlanJson = planJson;
         executor.execute(() -> runDownload(finalPlanJson, startId));
@@ -222,7 +218,7 @@ public class GameDownloadService extends Service {
             wakeLock.acquire(6L * 60L * 60L * 1000L);
 
             activePlan = DownloadPlan.parse(planJson);
-            File downloadsRoot = getDownloadsRoot(this);
+            File downloadsRoot = LauncherStorage.downloadsRoot(this);
             File workDir = new File(downloadsRoot, "work-" + activePlan.archiveSha256.substring(0, 12));
             File chunksDir = new File(workDir, "chunks");
             File archiveFile = new File(workDir, activePlan.archiveFileName);
@@ -277,7 +273,7 @@ public class GameDownloadService extends Service {
         boolean cancelled = false;
         try {
             activePlan = DownloadPlan.parse(planJson);
-            File downloadsRoot = getDownloadsRoot(this);
+            File downloadsRoot = LauncherStorage.downloadsRoot(this);
             File workDir = new File(downloadsRoot, "work-" + activePlan.archiveSha256.substring(0, 12));
             File chunksDir = new File(workDir, "chunks");
             DownloadFileUtils.ensureDirectory(chunksDir);
@@ -345,7 +341,7 @@ public class GameDownloadService extends Service {
             if (root == null || !root.isDirectory() || !root.canWrite()) {
                 throw new IOException("无法写入选择的导出文件夹。");
             }
-            File workDir = new File(getDownloadsRoot(this), "work-" + activePlan.archiveSha256.substring(0, 12));
+            File workDir = new File(LauncherStorage.downloadsRoot(this), "work-" + activePlan.archiveSha256.substring(0, 12));
             File chunksDir = new File(workDir, "chunks");
             if (allChunksAvailable(activePlan, chunksDir)) {
                 exportVerifiedChunks(root, activePlan, chunksDir);
@@ -845,7 +841,7 @@ public class GameDownloadService extends Service {
     private static void writeStateAndBroadcast(Context context, JSONObject state) {
         String json = state.toString();
         synchronized (STATE_LOCK) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_STATE, json).apply();
+            LauncherStorage.prefs(context).edit().putString(LauncherStorage.PREF_STATE, json).apply();
         }
         Intent update = new Intent(ACTION_STATE);
         update.setPackage(context.getPackageName());
@@ -855,7 +851,7 @@ public class GameDownloadService extends Service {
 
     public static JSONObject readStateObject(Context context) {
         synchronized (STATE_LOCK) {
-            String json = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_STATE, "");
+            String json = LauncherStorage.prefs(context).getString(LauncherStorage.PREF_STATE, "");
             if (json == null || json.isBlank()) {
                 return idleState();
             }
@@ -872,11 +868,11 @@ public class GameDownloadService extends Service {
     }
 
     public static String getManagedVersion(Context context) {
-        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_MANAGED_VERSION, "");
+        return LauncherStorage.prefs(context).getString(LauncherStorage.PREF_MANAGED_VERSION, "");
     }
 
     public static void clearManagedVersion(Context context) {
-        context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().remove(PREF_MANAGED_VERSION).apply();
+        LauncherStorage.prefs(context).edit().remove(LauncherStorage.PREF_MANAGED_VERSION).apply();
     }
 
     public static boolean completeInstallation(Context context, String installToken) {
@@ -885,11 +881,11 @@ public class GameDownloadService extends Service {
             return false;
         }
         String version = state.optString("version", "");
-        DownloadFileUtils.deleteRecursively(new File(getDownloadsRoot(context), "prepared"));
-        context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-            .remove(PREF_STATE)
-            .remove(PREF_PLAN)
-            .putString(PREF_MANAGED_VERSION, version)
+        DownloadFileUtils.deleteRecursively(new File(LauncherStorage.downloadsRoot(context), "prepared"));
+        LauncherStorage.prefs(context).edit()
+            .remove(LauncherStorage.PREF_STATE)
+            .remove(LauncherStorage.PREF_PLAN)
+            .putString(LauncherStorage.PREF_MANAGED_VERSION, version)
             .apply();
         JSONObject completed = idleState();
         try {
@@ -926,10 +922,10 @@ public class GameDownloadService extends Service {
     }
 
     public static void clearAllDownloads(Context context) {
-        DownloadFileUtils.deleteRecursively(getDownloadsRoot(context));
-        context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-            .remove(PREF_STATE)
-            .remove(PREF_PLAN)
+        DownloadFileUtils.deleteRecursively(LauncherStorage.downloadsRoot(context));
+        LauncherStorage.prefs(context).edit()
+            .remove(LauncherStorage.PREF_STATE)
+            .remove(LauncherStorage.PREF_PLAN)
             .apply();
     }
 
@@ -964,7 +960,7 @@ public class GameDownloadService extends Service {
         if (activePlan == null) {
             return 0L;
         }
-        File chunksDir = new File(new File(getDownloadsRoot(this), "work-" + activePlan.archiveSha256.substring(0, 12)), "chunks");
+        File chunksDir = new File(new File(LauncherStorage.downloadsRoot(this), "work-" + activePlan.archiveSha256.substring(0, 12)), "chunks");
         return existingChunkBytes(activePlan, chunksDir);
     }
 
@@ -1040,14 +1036,6 @@ public class GameDownloadService extends Service {
             DownloadFileUtils.deleteRecursively(new File(downloadsRoot, "prepared"));
         }
         DownloadFileUtils.ensureDirectory(currentWorkDir);
-    }
-
-    private static File getDownloadsRoot(Context context) {
-        File root = new File(context.getFilesDir(), "downloads");
-        if (!root.exists()) {
-            root.mkdirs();
-        }
-        return root;
     }
 
     private static String formatBytes(long bytes) {
