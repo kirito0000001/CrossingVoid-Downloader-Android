@@ -45,8 +45,6 @@ public class LauncherUpdateService extends Service {
     private static final String PREF_PLAN = "plan";
     private static final String PREF_STATE = "state";
     private static final String INSTALLER_PRODUCT_KEY = "crossingvoid-launcher-android-installer";
-    private static final String CHANNEL_ID = "crossingvoid_launcher_update";
-    private static final int NOTIFICATION_ID = 2015;
     private static final int BUFFER_SIZE = 256 * 1024;
     private static final int MAX_ATTEMPTS = 3;
     private static final long STATE_INTERVAL_MS = 350L;
@@ -56,12 +54,13 @@ public class LauncherUpdateService extends Service {
     private static String lastLoggedStateSignature = "";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private LauncherUpdateNotifier notifier;
     private long lastStateAt;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        createNotificationChannel();
+        notifier.createChannel();
     }
 
     @Override
@@ -89,7 +88,7 @@ public class LauncherUpdateService extends Service {
 
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putString(PREF_PLAN, planJson).apply();
         CANCEL_REQUESTED.set(false);
-        startForegroundCompat(buildNotification(0));
+        notifier.startForeground(0);
         if (RUNNING.compareAndSet(false, true)) {
             String finalPlanJson = planJson;
             executor.execute(() -> runUpdate(finalPlanJson));
@@ -164,17 +163,17 @@ public class LauncherUpdateService extends Service {
                 throw error;
             }
             publishReady(plan, complete);
-            showCompletionNotification(plan.versionName);
+            notifier.showCompletion(plan.versionName);
         } catch (CancelledException ignored) {
             clearAll(this);
             publishState(this, idleState());
-            NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID);
+            notifier.cancelActive();
         } catch (Exception error) {
             String message = error.getMessage() == null || error.getMessage().isBlank() ? error.getClass().getSimpleName() : error.getMessage();
             JSONObject state = errorState(message);
             if (plan != null) putPlanIdentity(state, plan);
             publishState(this, state);
-            showErrorNotification(message);
+            notifier.showError(message);
         } finally {
             RUNNING.set(false);
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
@@ -234,7 +233,7 @@ public class LauncherUpdateService extends Service {
             throw new IllegalStateException(error);
         }
         publishState(this, state);
-        updateNotification((int) Math.round(state.optDouble("percent", 0.0)));
+        notifier.update((int) Math.round(state.optDouble("percent", 0.0)));
     }
 
     private void validateDownloadedApk(File apk, UpdatePlan plan) throws Exception {
@@ -436,64 +435,6 @@ public class LauncherUpdateService extends Service {
         File[] children = file.listFiles();
         if (children != null) for (File child : children) deleteRecursively(child);
         file.delete();
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "启动器更新", NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("显示零境启动器更新进度");
-            getSystemService(NotificationManager.class).createNotificationChannel(channel);
-        }
-    }
-
-    private Notification buildNotification(int percent) {
-        Intent openIntent = new Intent(this, MainActivity.class);
-        PendingIntent openPending = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("零境启动器")
-            .setContentText("正在更新零境启动器...")
-            .setContentIntent(openPending)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setProgress(100, Math.max(0, Math.min(100, percent)), false)
-            .build();
-    }
-
-    private void startForegroundCompat(Notification notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
-        }
-    }
-
-    private void updateNotification(int percent) {
-        try {
-            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, buildNotification(percent));
-        } catch (SecurityException ignored) {
-        }
-    }
-
-    private void showCompletionNotification(String versionName) {
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("启动器更新已就绪")
-            .setContentText("版本 " + versionName + " 可以安装")
-            .setAutoCancel(true)
-            .build();
-        NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification);
-    }
-
-    private void showErrorNotification(String message) {
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_error)
-            .setContentTitle("启动器更新失败")
-            .setContentText(message)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
-            .setAutoCancel(true)
-            .build();
-        NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification);
     }
 
     private static final class UpdatePlan {
