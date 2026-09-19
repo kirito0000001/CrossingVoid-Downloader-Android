@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { nativeSource } from "./helpers/androidNativeSources";
+
 const launcherPlugin = readFileSync(
   resolve(process.cwd(), "android/app/src/main/java/com/lingjing/launcher/android/AndroidLauncherPlugin.java"),
   "utf8",
@@ -18,7 +20,7 @@ const launcherManifest = readFileSync(
 describe("same-package OBB preparation", () => {
   it("prepares OBB directly in the disposable installer's package-owned OBB directory", () => {
     expect(downloadService).toContain("getObbDir()");
-    expect(downloadService).toContain('target.getName() + ".extracting"');
+    expect(nativeSource).toContain('target.getName() + ".extracting"');
     expect(downloadService).not.toContain('File obbDir = new File(preparedDir, "obb")');
     expect(downloadService).toContain('"APK 和 OBB 已准备完成"');
   });

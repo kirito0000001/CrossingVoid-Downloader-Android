@@ -60,7 +60,6 @@ public class GameDownloadService extends Service {
     private static final String PREF_STATE = "state";
     private static final String PREF_PLAN = "plan";
     private static final String PREF_MANAGED_VERSION = "managedVersion";
-    private static final int BUFFER_SIZE = 256 * 1024;
     private static final int MAX_ATTEMPTS = 3;
     private static final long STATE_INTERVAL_MS = 350L;
     private static final String RECOVERY_MANIFEST_FILE = "零境启动器恢复信息.json";
@@ -79,12 +78,24 @@ public class GameDownloadService extends Service {
     private int verifiedChunks;
     private String lastLoggedStateSignature = "";
     private DownloadNotifier notifier;
+    private PackageInstaller installer;
 
     @Override
     public void onCreate() {
         super.onCreate();
         notifier = DownloadNotifier.attach(this);
         notifier.createChannel();
+        installer = new PackageInstaller(new PackageInstaller.Progress() {
+            @Override
+            public void publish(String status, String message, long downloadedBytes, double percent, int currentChunk, boolean force) {
+                publishState(status, message, downloadedBytes, percent, currentChunk, force, null);
+            }
+
+            @Override
+            public void checkControlSignals() throws Exception {
+                GameDownloadService.this.checkControlSignals();
+            }
+        });
     }
 
     @Override
@@ -204,7 +215,7 @@ public class GameDownloadService extends Service {
             File workDir = new File(downloadsRoot, "work-" + activePlan.archiveSha256.substring(0, 12));
             File chunksDir = new File(workDir, "chunks");
             File archiveFile = new File(workDir, activePlan.archiveFileName);
-            ensureDirectory(chunksDir);
+            DownloadFileUtils.ensureDirectory(chunksDir);
             prepareForPlan(downloadsRoot, workDir, activePlan);
 
             JSONObject previous = readStateObject(this);
@@ -220,13 +231,13 @@ public class GameDownloadService extends Service {
             if (archiveFile.length() != activePlan.totalBytes) {
                 downloadChunks(activePlan, chunksDir);
                 checkControlSignals();
-                mergeChunks(activePlan, chunksDir, archiveFile);
+                installer.mergeChunks(activePlan, chunksDir, archiveFile);
             }
             checkControlSignals();
-            verifyArchive(activePlan, archiveFile);
+            installer.verifyArchive(activePlan, archiveFile);
             checkControlSignals();
-            terminalPrepared = extractPackage(activePlan, archiveFile, downloadsRoot);
-            deleteRecursively(workDir);
+            terminalPrepared = installer.extractPackage(activePlan, archiveFile, downloadsRoot, getObbDir());
+            DownloadFileUtils.deleteRecursively(workDir);
             terminalStatus = "ready";
             terminalMessage = "APK 和 OBB 已准备完成";
         } catch (PausedException ignored) {
@@ -258,7 +269,7 @@ public class GameDownloadService extends Service {
             File downloadsRoot = getDownloadsRoot(this);
             File workDir = new File(downloadsRoot, "work-" + activePlan.archiveSha256.substring(0, 12));
             File chunksDir = new File(workDir, "chunks");
-            ensureDirectory(chunksDir);
+            DownloadFileUtils.ensureDirectory(chunksDir);
             prepareForPlan(downloadsRoot, workDir, activePlan);
             DocumentFile root = DocumentFile.fromTreeUri(this, treeUri);
             if (root == null || !root.isDirectory()) throw new IOException("无法读取选择的游戏碎片文件夹。");
@@ -281,17 +292,17 @@ public class GameDownloadService extends Service {
                 if (destination.length() == chunk.sizeBytes && hashMatches(destination, chunk.sha256)) {
                     continue;
                 }
-                deleteFile(destination);
+                DownloadFileUtils.deleteFile(destination);
                 copyAndVerifyImportedChunk(sourceFile, chunk, destination, chunksDir);
                 imported++;
             }
             verifiedChunks = verifiedChunkCount(activePlan, chunksDir);
             if (verifiedChunks == activePlan.chunks.size()) {
                 File archiveFile = new File(workDir, activePlan.archiveFileName);
-                mergeChunks(activePlan, chunksDir, archiveFile);
-                verifyArchive(activePlan, archiveFile);
-                terminalPrepared = extractPackage(activePlan, archiveFile, downloadsRoot);
-                deleteRecursively(workDir);
+                installer.mergeChunks(activePlan, chunksDir, archiveFile);
+                installer.verifyArchive(activePlan, archiveFile);
+                terminalPrepared = installer.extractPackage(activePlan, archiveFile, downloadsRoot, getObbDir());
+                DownloadFileUtils.deleteRecursively(workDir);
                 terminalStatus = "ready";
                 terminalMessage = "游戏碎片校验完成，APK 和 OBB 已准备完成";
             } else {
@@ -396,11 +407,11 @@ public class GameDownloadService extends Service {
         if (tempFile == null) throw new IOException("无法创建导出文件：" + temporaryName);
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long copied = 0L;
-        try (InputStream input = new BufferedInputStream(new FileInputStream(source), BUFFER_SIZE);
+        try (InputStream input = new BufferedInputStream(new FileInputStream(source), DownloadFileUtils.BUFFER_SIZE);
              OutputStream rawOutput = getContentResolver().openOutputStream(tempFile.getUri(), "wt");
-             OutputStream output = rawOutput == null ? null : new BufferedOutputStream(rawOutput, BUFFER_SIZE)) {
+             OutputStream output = rawOutput == null ? null : new BufferedOutputStream(rawOutput, DownloadFileUtils.BUFFER_SIZE)) {
             if (output == null) throw new IOException("无法写入导出文件：" + temporaryName);
-            byte[] buffer = new byte[BUFFER_SIZE];
+            byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
             int read;
             while ((read = input.read(buffer)) >= 0) {
                 checkControlSignals();
@@ -444,9 +455,9 @@ public class GameDownloadService extends Service {
     private String sha256(DocumentFile file) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         try (InputStream rawInput = getContentResolver().openInputStream(file.getUri());
-             InputStream input = rawInput == null ? null : new BufferedInputStream(rawInput, BUFFER_SIZE)) {
+             InputStream input = rawInput == null ? null : new BufferedInputStream(rawInput, DownloadFileUtils.BUFFER_SIZE)) {
             if (input == null) throw new IOException("无法重新读取导出文件：" + file.getName());
-            byte[] buffer = new byte[BUFFER_SIZE];
+            byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
             int read;
             while ((read = input.read(buffer)) >= 0) {
                 if (read > 0) digest.update(buffer, 0, read);
@@ -501,8 +512,8 @@ public class GameDownloadService extends Service {
         File preparedDir = new File(downloadsRoot, "prepared");
         File obbDir = getObbDir();
         if (obbDir == null) throw new IOException("系统没有提供可用的游戏 OBB 目录");
-        ensureDirectory(preparedDir);
-        ensureDirectory(obbDir);
+        DownloadFileUtils.ensureDirectory(preparedDir);
+        DownloadFileUtils.ensureDirectory(obbDir);
         File apkDestination = new File(preparedDir, "CrossingVoid-latest.apk");
         File obbDestination = new File(obbDir, obbName);
         long apkSize = apkInfo.getLong("sizeBytes");
@@ -510,7 +521,7 @@ public class GameDownloadService extends Service {
         long total = Math.addExact(apkSize, obbSize);
         copyAndVerifyRecoveryDocument(apkSource, apkDestination, apkSize, apkInfo.getString("sha256"), 0L, total, 1, 2);
         copyAndVerifyRecoveryDocument(obbSource, obbDestination, obbSize, obbInfo.getString("sha256"), apkSize, total, 2, 2);
-        removeStaleObbFiles(obbDir, obbDestination);
+        installer.removeStaleObbFiles(obbDir, obbDestination);
         return new PreparedFiles(apkDestination, obbDestination, UUID.randomUUID().toString());
     }
 
@@ -520,16 +531,16 @@ public class GameDownloadService extends Service {
         if (expectedSize <= 0 || !expectedSha256.matches("^[a-fA-F0-9]{64}$")) {
             throw new IOException("恢复文件校验信息不完整：" + source.getName());
         }
-        ensureDirectory(destination.getParentFile());
+        DownloadFileUtils.ensureDirectory(destination.getParentFile());
         File temporary = new File(destination.getParentFile(), destination.getName() + ".importing");
-        deleteFile(temporary);
+        DownloadFileUtils.deleteFile(temporary);
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long copied = 0L;
         try (InputStream rawInput = getContentResolver().openInputStream(source.getUri());
-             InputStream input = rawInput == null ? null : new BufferedInputStream(rawInput, BUFFER_SIZE);
-             OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), BUFFER_SIZE)) {
+             InputStream input = rawInput == null ? null : new BufferedInputStream(rawInput, DownloadFileUtils.BUFFER_SIZE);
+             OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), DownloadFileUtils.BUFFER_SIZE)) {
             if (input == null) throw new IOException("无法读取恢复文件：" + source.getName());
-            byte[] buffer = new byte[BUFFER_SIZE];
+            byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
             int read;
             while ((read = input.read(buffer)) >= 0) {
                 checkControlSignals();
@@ -544,10 +555,10 @@ public class GameDownloadService extends Service {
         }
         String actualHash = toHex(digest.digest());
         if (copied != expectedSize || temporary.length() != expectedSize || !actualHash.equalsIgnoreCase(expectedSha256)) {
-            deleteFile(temporary);
+            DownloadFileUtils.deleteFile(temporary);
             throw new IOException("恢复文件校验失败：" + source.getName());
         }
-        deleteFile(destination);
+        DownloadFileUtils.deleteFile(destination);
         if (!temporary.renameTo(destination)) throw new IOException("无法保存恢复文件：" + destination.getName());
     }
 
@@ -635,7 +646,7 @@ public class GameDownloadService extends Service {
 
     private void copyAndVerifyImportedChunk(DocumentFile source, DownloadChunk chunk, File destination, File chunksDir) throws Exception {
         File temporary = new File(destination.getParentFile(), destination.getName() + ".importing");
-        deleteFile(temporary);
+        DownloadFileUtils.deleteFile(temporary);
         MessageDigest digest;
         try {
             digest = MessageDigest.getInstance("SHA-256");
@@ -645,10 +656,10 @@ public class GameDownloadService extends Service {
         long copied = 0L;
         long existing = existingChunkBytes(activePlan, chunksDir);
         try (InputStream sourceInput = getContentResolver().openInputStream(source.getUri());
-             InputStream bufferedInput = sourceInput == null ? null : new BufferedInputStream(sourceInput, BUFFER_SIZE);
-             OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), BUFFER_SIZE)) {
+             InputStream bufferedInput = sourceInput == null ? null : new BufferedInputStream(sourceInput, DownloadFileUtils.BUFFER_SIZE);
+             OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), DownloadFileUtils.BUFFER_SIZE)) {
             if (bufferedInput == null) throw new IOException("无法读取导入的碎片：" + chunk.fileName);
-            byte[] buffer = new byte[BUFFER_SIZE];
+            byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
             int read;
             while ((read = bufferedInput.read(buffer)) >= 0) {
                 checkControlSignals();
@@ -663,10 +674,10 @@ public class GameDownloadService extends Service {
         }
         String actualHash = toHex(digest.digest());
         if (copied != chunk.sizeBytes || !actualHash.equalsIgnoreCase(chunk.sha256)) {
-            deleteFile(temporary);
+            DownloadFileUtils.deleteFile(temporary);
             throw new IOException("导入碎片校验失败：" + chunk.fileName);
         }
-        deleteFile(destination);
+        DownloadFileUtils.deleteFile(destination);
         if (!temporary.renameTo(destination)) throw new IOException("无法保存导入碎片：" + destination.getName());
     }
 
@@ -700,7 +711,7 @@ public class GameDownloadService extends Service {
                 continue;
             }
             if (file.length() > chunk.sizeBytes || file.length() == chunk.sizeBytes) {
-                deleteFile(file);
+                DownloadFileUtils.deleteFile(file);
             }
 
             Exception lastError = null;
@@ -713,7 +724,7 @@ public class GameDownloadService extends Service {
                     }
                     publishState("verifying", "正在校验第 " + chunk.index + " / " + chunk.count + " 片", downloadedBytes(), currentPercent(), chunk.index, true, null);
                     if (!hashMatches(file, chunk.sha256)) {
-                        deleteFile(file);
+                        DownloadFileUtils.deleteFile(file);
                         throw new IOException("第 " + chunk.index + " 片校验失败");
                     }
                     verifiedChunks = position + 1;
@@ -762,16 +773,16 @@ public class GameDownloadService extends Service {
                 resumeFrom = 0;
             }
 
-            ensureDirectory(outputFile.getParentFile());
+            DownloadFileUtils.ensureDirectory(outputFile.getParentFile());
             try (
-                InputStream input = new BufferedInputStream(connection.getInputStream(), BUFFER_SIZE);
+                InputStream input = new BufferedInputStream(connection.getInputStream(), DownloadFileUtils.BUFFER_SIZE);
                 RandomAccessFile output = new RandomAccessFile(outputFile, "rw")
             ) {
                 if (resumeFrom == 0) {
                     output.setLength(0);
                 }
                 output.seek(resumeFrom);
-                byte[] buffer = new byte[BUFFER_SIZE];
+                byte[] buffer = new byte[DownloadFileUtils.BUFFER_SIZE];
                 int read;
                 while ((read = input.read(buffer)) >= 0) {
                     checkControlSignals();
@@ -820,164 +831,6 @@ public class GameDownloadService extends Service {
         } finally {
             connection.disconnect();
         }
-    }
-
-    private void mergeChunks(DownloadPlan plan, File chunksDir, File archiveFile) throws Exception {
-        publishState("merging", "正在合并下载分片", plan.totalBytes, 85.0, plan.chunks.size(), true, null);
-        File temporary = new File(archiveFile.getParentFile(), archiveFile.getName() + ".merging");
-        deleteFile(temporary);
-        long copied = 0L;
-        byte[] buffer = new byte[BUFFER_SIZE];
-        try (OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), BUFFER_SIZE)) {
-            for (DownloadChunk chunk : plan.chunks) {
-                checkControlSignals();
-                File part = new File(chunksDir, chunk.fileName);
-                if (part.length() != chunk.sizeBytes) {
-                    throw new IOException("合并前发现第 " + chunk.index + " 片不完整");
-                }
-                try (InputStream input = new BufferedInputStream(new FileInputStream(part), BUFFER_SIZE)) {
-                    int read;
-                    while ((read = input.read(buffer)) >= 0) {
-                        checkControlSignals();
-                        if (read == 0) {
-                            continue;
-                        }
-                        output.write(buffer, 0, read);
-                        copied += read;
-                        double percent = 85.0 + (copied / (double) plan.totalBytes) * 5.0;
-                        publishState("merging", "正在合并第 " + chunk.index + " / " + chunk.count + " 片", plan.totalBytes, percent, chunk.index, false, null);
-                    }
-                }
-                deleteFile(part);
-            }
-        }
-        if (temporary.length() != plan.totalBytes) {
-            throw new IOException("合并后的完整包大小不正确");
-        }
-        deleteFile(archiveFile);
-        if (!temporary.renameTo(archiveFile)) {
-            throw new IOException("无法保存合并后的完整包");
-        }
-    }
-
-    private void verifyArchive(DownloadPlan plan, File archiveFile) throws Exception {
-        publishState("verifying", "正在校验完整安装包", plan.totalBytes, 90.0, plan.chunks.size(), true, null);
-        String actual = sha256WithProgress(archiveFile, 90.0, 5.0);
-        if (!actual.equalsIgnoreCase(plan.archiveSha256)) {
-            deleteFile(archiveFile);
-            throw new IOException("完整安装包 SHA256 校验失败，请重新下载");
-        }
-    }
-
-    private PreparedFiles extractPackage(DownloadPlan plan, File archiveFile, File downloadsRoot) throws Exception {
-        publishState("extracting", "正在解压 APK 和 OBB", plan.totalBytes, 95.0, plan.chunks.size(), true, null);
-        File preparedDir = new File(downloadsRoot, "prepared");
-        File obbDir = getObbDir();
-        if (obbDir == null) {
-            throw new IOException("系统没有提供可用的游戏 OBB 目录");
-        }
-        ensureDirectory(obbDir);
-        File apkOutput = new File(preparedDir, "CrossingVoid-latest.apk");
-        File obbOutput = null;
-        long extracted = 0L;
-        byte[] buffer = new byte[BUFFER_SIZE];
-
-        try (ZipInputStream zip = new ZipInputStream(new BufferedInputStream(new FileInputStream(archiveFile), BUFFER_SIZE))) {
-            ZipEntry entry;
-            while ((entry = zip.getNextEntry()) != null) {
-                checkControlSignals();
-                String name = entry.getName().replace('\\', '/');
-                if (!DownloadFileUtils.isSafeZipEntry(name)) {
-                    throw new IOException("安装包包含不安全路径：" + name);
-                }
-                if (entry.isDirectory()) {
-                    zip.closeEntry();
-                    continue;
-                }
-
-                File target = null;
-                if (name.toLowerCase(Locale.ROOT).endsWith(".apk")) {
-                    target = apkOutput;
-                } else if (name.toLowerCase(Locale.ROOT).endsWith(".obb")) {
-                    target = new File(obbDir, new File(name).getName());
-                    obbOutput = target;
-                }
-                if (target == null) {
-                    zip.closeEntry();
-                    continue;
-                }
-
-                ensureDirectory(target.getParentFile());
-                File temporary = new File(target.getParentFile(), target.getName() + ".extracting");
-                deleteFile(temporary);
-                try (OutputStream output = new BufferedOutputStream(new FileOutputStream(temporary), BUFFER_SIZE)) {
-                    int read;
-                    while ((read = zip.read(buffer)) >= 0) {
-                        checkControlSignals();
-                        if (read == 0) {
-                            continue;
-                        }
-                        output.write(buffer, 0, read);
-                        extracted += read;
-                        double percent = 95.0 + Math.min(1.0, extracted / (double) plan.totalBytes) * 5.0;
-                        publishState("extracting", "正在解压 " + new File(name).getName(), plan.totalBytes, percent, plan.chunks.size(), false, null);
-                    }
-                }
-                deleteFile(target);
-                if (!temporary.renameTo(target)) {
-                    throw new IOException("无法保存 " + target.getName());
-                }
-                zip.closeEntry();
-            }
-        }
-        if (!apkOutput.isFile() || apkOutput.length() <= 0) {
-            throw new IOException("安装包内没有找到 APK");
-        }
-        if (obbOutput == null || !obbOutput.isFile() || obbOutput.length() <= 0) {
-            throw new IOException("安装包内没有找到 OBB");
-        }
-        removeStaleObbFiles(obbDir, obbOutput);
-        return new PreparedFiles(apkOutput, obbOutput, UUID.randomUUID().toString());
-    }
-
-    private void removeStaleObbFiles(File obbDir, File currentObb) {
-        File[] files = obbDir.listFiles();
-        if (files == null) return;
-        for (File file : files) {
-            String name = file.getName().toLowerCase(Locale.ROOT);
-            if (!file.equals(currentObb) && file.isFile() && (name.startsWith("main.") || name.startsWith("patch.")) && name.endsWith(".obb")) {
-                file.delete();
-            }
-        }
-    }
-
-    private String sha256WithProgress(File file, double basePercent, double spanPercent) throws Exception {
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException error) {
-            throw new IllegalStateException("当前设备不支持 SHA-256", error);
-        }
-        long processed = 0L;
-        byte[] buffer = new byte[BUFFER_SIZE];
-        try (InputStream input = new BufferedInputStream(new FileInputStream(file), BUFFER_SIZE)) {
-            int read;
-            while ((read = input.read(buffer)) >= 0) {
-                checkControlSignals();
-                if (read == 0) {
-                    continue;
-                }
-                digest.update(buffer, 0, read);
-                processed += read;
-                double percent = basePercent + Math.min(1.0, processed / (double) Math.max(1L, file.length())) * spanPercent;
-                publishState("verifying", "正在校验完整安装包", activePlan.totalBytes, percent, activePlan.chunks.size(), false, null);
-            }
-        }
-        StringBuilder result = new StringBuilder(64);
-        for (byte value : digest.digest()) {
-            result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
-        }
-        return result.toString();
     }
 
     private void publishDownloadProgress(String message, boolean force) {
@@ -1107,7 +960,7 @@ public class GameDownloadService extends Service {
             return false;
         }
         String version = state.optString("version", "");
-        deleteRecursively(new File(getDownloadsRoot(context), "prepared"));
+        DownloadFileUtils.deleteRecursively(new File(getDownloadsRoot(context), "prepared"));
         context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .remove(PREF_STATE)
             .remove(PREF_PLAN)
@@ -1148,7 +1001,7 @@ public class GameDownloadService extends Service {
     }
 
     public static void clearAllDownloads(Context context) {
-        deleteRecursively(getDownloadsRoot(context));
+        DownloadFileUtils.deleteRecursively(getDownloadsRoot(context));
         context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             .remove(PREF_STATE)
             .remove(PREF_PLAN)
@@ -1271,14 +1124,14 @@ public class GameDownloadService extends Service {
         if (children != null) {
             for (File child : children) {
                 if (child.getName().startsWith("work-") && !child.equals(currentWorkDir)) {
-                    deleteRecursively(child);
+                    DownloadFileUtils.deleteRecursively(child);
                 }
             }
         }
         if (!samePlan) {
-            deleteRecursively(new File(downloadsRoot, "prepared"));
+            DownloadFileUtils.deleteRecursively(new File(downloadsRoot, "prepared"));
         }
-        ensureDirectory(currentWorkDir);
+        DownloadFileUtils.ensureDirectory(currentWorkDir);
     }
 
     private static File getDownloadsRoot(Context context) {
@@ -1289,51 +1142,11 @@ public class GameDownloadService extends Service {
         return root;
     }
 
-    private static void ensureDirectory(File directory) throws IOException {
-        if (directory == null) {
-            return;
-        }
-        if (!directory.exists() && !directory.mkdirs()) {
-            throw new IOException("无法创建目录：" + directory.getAbsolutePath());
-        }
-    }
-
-    private static void deleteFile(File file) throws IOException {
-        if (file.exists() && !file.delete()) {
-            throw new IOException("无法删除文件：" + file.getAbsolutePath());
-        }
-    }
-
-    private static void deleteRecursively(File file) {
-        if (file == null || !file.exists()) {
-            return;
-        }
-        File[] children = file.listFiles();
-        if (children != null) {
-            for (File child : children) {
-                deleteRecursively(child);
-            }
-        }
-        file.delete();
-    }
-
     private static String formatBytes(long bytes) {
         if (bytes >= 1024L * 1024L * 1024L) {
             return String.format(Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
         }
         return String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
-    }
-
-    private static final class PreparedFiles {
-        final File apk;
-        final File obb;
-        final String installToken;
-
-        PreparedFiles(File apk, File obb, String installToken) {
-            this.apk = apk;
-            this.obb = obb;
-            this.installToken = installToken;
-        }
     }
 
     private static final class ExportedFile {

@@ -61,4 +61,37 @@ public class DownloadFileUtilsTest {
     public void rejectsGithubChunkWithoutDirectUrl() {
         DownloadFileUtils.resolveDownloadUrl("github", "", "https://oss.example/signed");
     }
+
+    @Test
+    public void createsNestedDirectoriesAndIgnoresNull() throws Exception {
+        File nested = new File(temporaryFolder.getRoot(), "a/b/c");
+
+        DownloadFileUtils.ensureDirectory(nested);
+        DownloadFileUtils.ensureDirectory(null);
+
+        assertTrue(nested.isDirectory());
+    }
+
+    @Test
+    public void deletesExistingFileAndIgnoresMissingOne() throws Exception {
+        File file = temporaryFolder.newFile("obsolete.bin");
+
+        DownloadFileUtils.deleteFile(file);
+        DownloadFileUtils.deleteFile(new File(temporaryFolder.getRoot(), "already-gone.bin"));
+
+        assertFalse(file.exists());
+    }
+
+    @Test
+    public void removesDirectoryTreeRecursivelyAndIgnoresNull() throws Exception {
+        File root = new File(temporaryFolder.getRoot(), "work");
+        File child = new File(root, "chunks");
+        assertTrue(child.mkdirs());
+        Files.write(new File(child, "part001").toPath(), new byte[] { 1, 2, 3 });
+
+        DownloadFileUtils.deleteRecursively(root);
+        DownloadFileUtils.deleteRecursively(null);
+
+        assertFalse(root.exists());
+    }
 }

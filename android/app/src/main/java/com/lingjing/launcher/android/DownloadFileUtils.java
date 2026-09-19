@@ -7,6 +7,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 final class DownloadFileUtils {
+    static final int BUFFER_SIZE = 256 * 1024;
     private static final long EXTRA_FREE_BYTES = 256L * 1024L * 1024L;
 
     private DownloadFileUtils() {
@@ -72,5 +73,33 @@ final class DownloadFileUtils {
             return directUrl;
         }
         return officialUrl;
+    }
+
+    static void ensureDirectory(File directory) throws IOException {
+        if (directory == null) {
+            return;
+        }
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new IOException("无法创建目录：" + directory.getAbsolutePath());
+        }
+    }
+
+    static void deleteFile(File file) throws IOException {
+        if (file.exists() && !file.delete()) {
+            throw new IOException("无法删除文件：" + file.getAbsolutePath());
+        }
+    }
+
+    static void deleteRecursively(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                deleteRecursively(child);
+            }
+        }
+        file.delete();
     }
 }

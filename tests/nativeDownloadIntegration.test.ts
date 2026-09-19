@@ -1,6 +1,8 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+
+import { nativeSource } from "./helpers/androidNativeSources";
 
 const appSource = readFileSync(resolve(process.cwd(), "src/App.vue"), "utf8");
 const nativeBridgeSource = readFileSync(resolve(process.cwd(), "src/services/androidLauncher.ts"), "utf8");
@@ -21,14 +23,6 @@ const apkValidatorSource = readFileSync(
   resolve(process.cwd(), "android/app/src/main/java/com/lingjing/launcher/android/ApkPackageValidator.java"),
   "utf8",
 );
-
-// 原生层的断言用整个包目录：某个职责从 GameDownloadService 拆到新类时，
-// 只要能力还在，测试就不该因为它换了文件而失败。
-const nativePackageDir = "android/app/src/main/java/com/lingjing/launcher/android";
-const nativeSource = readdirSync(resolve(process.cwd(), nativePackageDir))
-  .filter((file) => file.endsWith(".java"))
-  .map((file) => readFileSync(resolve(process.cwd(), nativePackageDir, file), "utf8"))
-  .join("\n");
 
 describe("native Android game download integration", () => {
   it("uses the foreground native downloader instead of the simulated timer", () => {
