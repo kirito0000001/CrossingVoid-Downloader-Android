@@ -44,7 +44,7 @@ public class LauncherUpdateService extends Service {
     static final String PREFS_NAME = "crossingvoid_launcher_update";
     static final String PREF_PLAN = "plan";
     static final String PREF_STATE = "state";
-    private static final String INSTALLER_PRODUCT_KEY = "crossingvoid-launcher-android-installer";
+    static final String INSTALLER_PRODUCT_KEY = "crossingvoid-launcher-android-installer";
     private static final int BUFFER_SIZE = 256 * 1024;
     private static final int MAX_ATTEMPTS = 3;
     private static final long STATE_INTERVAL_MS = 350L;
@@ -346,36 +346,6 @@ public class LauncherUpdateService extends Service {
         File[] children = file.listFiles();
         if (children != null) for (File child : children) deleteRecursively(child);
         file.delete();
-    }
-
-    private static final class UpdatePlan {
-        final String versionName;
-        final long versionCode;
-        final String fileName;
-        final String url;
-        final long sizeBytes;
-        final String sha256;
-
-        UpdatePlan(JSONObject source) throws JSONException {
-            String productKey = source.getString("productKey");
-            if (!INSTALLER_PRODUCT_KEY.equals(productKey)) {
-                throw new JSONException("启动器更新产品标识不正确");
-            }
-            versionName = source.getString("versionName");
-            versionCode = source.getLong("versionCode");
-            JSONObject asset = source.getJSONObject("asset");
-            fileName = asset.getString("fileName");
-            url = asset.getString("url");
-            sizeBytes = asset.getLong("sizeBytes");
-            sha256 = asset.getString("sha256").toLowerCase();
-            if (versionCode <= 0 || sizeBytes <= 0 || sha256.length() != 64 || !url.startsWith("https://")) {
-                throw new JSONException("启动器更新清单不完整");
-            }
-        }
-
-        static UpdatePlan parse(String json) throws JSONException {
-            return new UpdatePlan(new JSONObject(json));
-        }
     }
 
     private static final class CancelledException extends Exception {
