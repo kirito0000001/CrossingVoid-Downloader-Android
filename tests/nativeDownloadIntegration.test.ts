@@ -91,7 +91,7 @@ describe("native Android game download integration", () => {
     expect(manifestSource).toContain("android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS");
     expect(nativeBridgeSource).toContain("getLauncherPermissionStatus()");
     expect(nativeBridgeSource).toContain("openBatteryOptimizationSettings()");
-    expect(pluginSource).toContain("isIgnoringBatteryOptimizations");
+    expect(nativeSource).toContain("isIgnoringBatteryOptimizations");
     expect(pluginSource).toContain("Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS");
     expect(appSource).toContain("安装应用权限");
     expect(appSource).toContain("后台下载权限");

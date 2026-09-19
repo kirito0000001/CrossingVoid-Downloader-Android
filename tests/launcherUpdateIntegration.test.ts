@@ -183,7 +183,7 @@ describe("Android launcher hot update integration", () => {
     );
     expect(updateServiceSource).toContain("compareVersionNames(currentVersionName, targetVersionName)");
     expect(pluginSource).toContain(
-      "clearIfInstalled(getContext(), packageVersionCode(packageInfo), packageInfo.versionName)",
+      "clearIfInstalled(getContext(), LauncherUpdateVerifier.packageVersionCode(packageInfo), packageInfo.versionName)",
     );
   });
 

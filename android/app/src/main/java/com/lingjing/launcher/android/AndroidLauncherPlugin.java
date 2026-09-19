@@ -117,7 +117,7 @@ public class AndroidLauncherPlugin extends Plugin {
             PackageInfo packageInfo = getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0);
             JSObject result = new JSObject();
             result.put("versionName", packageInfo.versionName == null ? "" : packageInfo.versionName);
-            result.put("versionCode", packageVersionCode(packageInfo));
+            result.put("versionCode", LauncherUpdateVerifier.packageVersionCode(packageInfo));
             call.resolve(result);
         } catch (PackageManager.NameNotFoundException error) {
             call.reject("无法读取启动器版本。", error);
@@ -237,7 +237,7 @@ public class AndroidLauncherPlugin extends Plugin {
         }
 
         try {
-            Intent intent = createInstallPermissionIntent();
+            Intent intent = LauncherInstallSupport.createInstallPermissionIntent(getContext());
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             getContext().startActivity(intent);
             JSObject result = new JSObject();
@@ -251,8 +251,8 @@ public class AndroidLauncherPlugin extends Plugin {
     @PluginMethod
     public void getLauncherPermissionStatus(PluginCall call) {
         JSObject result = new JSObject();
-        result.put("canInstallUnknownApps", canInstallUnknownApps());
-        result.put("batteryOptimizationIgnored", isBatteryOptimizationIgnored());
+        result.put("canInstallUnknownApps", LauncherInstallSupport.canInstallUnknownApps(getContext()));
+        result.put("batteryOptimizationIgnored", LauncherInstallSupport.isBatteryOptimizationIgnored(getContext()));
         call.resolve(result);
     }
 
@@ -261,7 +261,7 @@ public class AndroidLauncherPlugin extends Plugin {
         boolean openedDirectRequest = false;
         try {
             Intent intent;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !isBatteryOptimizationIgnored()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !LauncherInstallSupport.isBatteryOptimizationIgnored(getContext())) {
                 intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
                 intent.setData(Uri.parse("package:" + getContext().getPackageName()));
                 openedDirectRequest = true;
@@ -434,7 +434,7 @@ public class AndroidLauncherPlugin extends Plugin {
         try {
             PackageInfo packageInfo = getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0);
             JSObject state = JSObject.fromJSONObject(
-                LauncherUpdateService.clearIfInstalled(getContext(), packageVersionCode(packageInfo), packageInfo.versionName)
+                LauncherUpdateService.clearIfInstalled(getContext(), LauncherUpdateVerifier.packageVersionCode(packageInfo), packageInfo.versionName)
             );
             if (!LauncherUpdateService.isRunning() && state.getString("status", "idle").equals("downloading")) {
                 state.put("status", "error");
@@ -509,7 +509,7 @@ public class AndroidLauncherPlugin extends Plugin {
 
     @ActivityCallback
     private void launcherInstallPermissionResult(PluginCall call, ActivityResult result) {
-        if (!canInstallUnknownApps()) {
+        if (!LauncherInstallSupport.canInstallUnknownApps(getContext())) {
             call.reject("未允许零境启动器安装未知应用，无法继续更新。");
             return;
         }
@@ -555,7 +555,7 @@ public class AndroidLauncherPlugin extends Plugin {
 
     @PluginMethod
     public void installDownloadedApk(PluginCall call) {
-        File apkFile = getDownloadedApkFile();
+        File apkFile = LauncherInstallSupport.downloadedApkFile(getContext());
         if (!apkFile.exists() || apkFile.length() <= 0) {
             call.reject("安装包不存在，请先完成下载。路径：" + apkFile.getAbsolutePath());
             return;
@@ -574,46 +574,17 @@ public class AndroidLauncherPlugin extends Plugin {
 
     @ActivityCallback
     private void gameInstallPermissionResult(PluginCall call, ActivityResult result) {
-        if (!canInstallUnknownApps()) {
+        if (!LauncherInstallSupport.canInstallUnknownApps(getContext())) {
             call.reject("未允许零境启动器安装未知应用，无法安装游戏。");
             return;
         }
         installDownloadedApk(call);
     }
 
-    private File getDownloadedApkFile() {
-        JSObject state;
-        try {
-            state = JSObject.fromJSONObject(GameDownloadService.readStateObject(getContext()));
-            String preparedPath = state.getString("apkPath", "");
-            if (!preparedPath.isBlank()) {
-                return new File(preparedPath);
-            }
-        } catch (Exception ignored) {
-        }
-        return new File(new File(new File(getContext().getFilesDir(), "downloads"), "prepared"), "CrossingVoid-latest.apk");
-    }
-
-    private boolean canInstallUnknownApps() {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O || getContext().getPackageManager().canRequestPackageInstalls();
-    }
-
-    private boolean isBatteryOptimizationIgnored() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
-        PowerManager powerManager = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
-        return powerManager != null && powerManager.isIgnoringBatteryOptimizations(getContext().getPackageName());
-    }
-
-    private Intent createInstallPermissionIntent() {
-        Intent intent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
-        intent.setData(Uri.parse("package:" + getContext().getPackageName()));
-        return intent;
-    }
-
     private boolean requestInstallPermission(PluginCall call, String callbackName) {
-        if (canInstallUnknownApps()) return false;
+        if (LauncherInstallSupport.canInstallUnknownApps(getContext())) return false;
         try {
-            Intent intent = createInstallPermissionIntent();
+            Intent intent = LauncherInstallSupport.createInstallPermissionIntent(getContext());
             startActivityForResult(call, intent, callbackName);
         } catch (ActivityNotFoundException | SecurityException error) {
             call.reject("无法打开安装未知应用权限设置。", error);
@@ -668,13 +639,6 @@ public class AndroidLauncherPlugin extends Plugin {
         } catch (SecurityException | IllegalArgumentException error) {
             call.reject("无法打开系统启动器更新界面。安装包权限或路径无效。", error);
         }
-    }
-
-    private static long packageVersionCode(PackageInfo packageInfo) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            return packageInfo.getLongVersionCode();
-        }
-        return packageInfo.versionCode;
     }
 
 }
