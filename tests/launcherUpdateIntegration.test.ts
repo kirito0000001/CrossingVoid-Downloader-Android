@@ -56,8 +56,9 @@ describe("Android launcher hot update integration", () => {
 
   it("keeps a local game chunk import entry for offline distribution", () => {
     expect(appSource).toContain("导入游戏碎片");
-    expect(appSource).toContain("importGameChunks");
-    expect(appSource).toContain("选择包含全部游戏碎片的文件夹");
+    expect(appSource).toContain("importGameChunksFromDevice");
+    // 清单 v1 的导入还没实现，入口保留但明确说明"适配中"，不能让玩家点进死路。
+    expect(appSource).toContain("碎片导入正在适配");
   });
 
   it("exports complete verified chunks and shows export progress in the global dock", () => {

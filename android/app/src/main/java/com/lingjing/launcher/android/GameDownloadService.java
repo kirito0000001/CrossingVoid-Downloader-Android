@@ -34,8 +34,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -45,6 +47,8 @@ import java.util.zip.ZipInputStream;
 
 public class GameDownloadService extends Service {
     public static final String ACTION_START = "com.lingjing.launcher.android.action.START_DOWNLOAD";
+    /** 清单 v1：按文件下载 + 组装 OBB（与老的切片流程并存，插件按计划形状路由）。 */
+    public static final String ACTION_START_PACKAGE = "com.lingjing.launcher.android.action.START_PACKAGE_DOWNLOAD";
     public static final String ACTION_PAUSE = "com.lingjing.launcher.android.action.PAUSE_DOWNLOAD";
     public static final String ACTION_CANCEL = "com.lingjing.launcher.android.action.CANCEL_DOWNLOAD";
     public static final String ACTION_IMPORT = "com.lingjing.launcher.android.action.IMPORT_CHUNKS";
@@ -68,12 +72,15 @@ public class GameDownloadService extends Service {
     private long lastRateAt;
     private double bytesPerSecond;
     private DownloadPlan activePlan;
+    private GamePackagePlan activePackagePlan;
     private int verifiedChunks;
+    private int verifiedFiles;
     private String lastLoggedStateSignature = "";
     private DownloadNotifier notifier;
     private ChunkTransfer transfer;
     private PackageInstaller installer;
     private ChunkDownloader downloader;
+    private PackageFileDownloader packageDownloader;
 
     @Override
     public void onCreate() {
@@ -118,6 +125,17 @@ public class GameDownloadService extends Service {
                 GameDownloadService.this.checkControlSignals();
             }
         });
+        packageDownloader = new PackageFileDownloader(new PackageFileDownloader.Host() {
+            @Override
+            public void publishProgress(String message, boolean force) {
+                publishPackageProgress(message, force);
+            }
+
+            @Override
+            public void checkControlSignals() throws Exception {
+                GameDownloadService.this.checkControlSignals();
+            }
+        }, "CrossingVoidAndroidLauncher/" + currentLauncherVersion());
         installer = new PackageInstaller(new PackageInstaller.Progress() {
             @Override
             public void publish(String status, String message, long downloadedBytes, double percent, int currentChunk, boolean force) {
@@ -149,6 +167,25 @@ public class GameDownloadService extends Service {
                 stopSelf();
             }
             return START_NOT_STICKY;
+        }
+
+        if (ACTION_START_PACKAGE.equals(action)) {
+            String packagePlanJson = intent == null ? null : intent.getStringExtra(EXTRA_PLAN);
+            if (packagePlanJson == null || packagePlanJson.isBlank()) {
+                saveAndBroadcastState(errorState("缺少游戏下载清单。"));
+                stopSelf();
+                return START_NOT_STICKY;
+            }
+            if (!RUNNING.compareAndSet(false, true)) {
+                return START_REDELIVER_INTENT;
+            }
+            PAUSE_REQUESTED.set(false);
+            CANCEL_REQUESTED.set(false);
+            LauncherStorage.prefs(this).edit().putString(LauncherStorage.PREF_PLAN, packagePlanJson).apply();
+            notifier.startForeground(0);
+            String finalPackagePlanJson = packagePlanJson;
+            executor.execute(() -> runPackageDownload(finalPackagePlanJson, startId));
+            return START_REDELIVER_INTENT;
         }
 
         if (ACTION_EXPORT.equals(action)) {
@@ -688,6 +725,342 @@ public class GameDownloadService extends Service {
             return String.format(Locale.ROOT, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
         }
         return String.format(Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
+    }
+
+    // ------------------------------------------------------------------
+    // 清单 v1：按文件下载 → 组装 OBB → 准备 APK
+    // ------------------------------------------------------------------
+
+    private void runPackageDownload(String planJson, int startId) {
+        PowerManager.WakeLock wakeLock = null;
+        String terminalStatus = null;
+        String terminalMessage = null;
+        PreparedFiles terminalPrepared = null;
+        boolean cancelled = false;
+        try {
+            PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CrossingVoidLauncher:GamePackage");
+            wakeLock.acquire(6L * 60L * 60L * 1000L);
+
+            activePackagePlan = GamePackagePlan.parse(planJson);
+            LauncherStorage.prefs(this).edit()
+                .putString(LauncherStorage.PREF_PLAN, planJson).apply();
+
+            File downloadsRoot = LauncherStorage.downloadsRoot(this);
+            File workDir = new File(downloadsRoot, "package-" + activePackagePlan.version);
+            File entriesDir = new File(workDir, "entries");
+            File preparedDir = new File(downloadsRoot, "prepared");
+            File apkTarget = new File(preparedDir, "CrossingVoid-latest.apk");
+            File obbDir = getObbDir();
+            File obbTarget = activePackagePlan.obbFileName.isEmpty() || obbDir == null
+                ? null
+                : new File(obbDir, activePackagePlan.obbFileName);
+
+            preparePackageWork(downloadsRoot, workDir, preparedDir);
+            JSONObject previous = readStateObject(this);
+            verifiedFiles = activePackagePlan.matchesState(previous) ? previous.optInt("verifiedFiles", 0) : 0;
+            verifiedFiles = Math.max(0, Math.min(verifiedFiles, activePackagePlan.files.size()));
+
+            long requiredBytes = missingPackageBytes(entriesDir, apkTarget, preparedDir) + packageObbBytes();
+            requiredBytes = Math.max(256L * 1024L * 1024L, requiredBytes);
+            long availableBytes = new StatFs(downloadsRoot.getAbsolutePath()).getAvailableBytes();
+            if (availableBytes < requiredBytes) {
+                throw new IOException("存储空间不足：还需要 " + formatBytes(requiredBytes)
+                    + "，当前可用 " + formatBytes(availableBytes));
+            }
+
+            downloadPackageFiles(entriesDir, apkTarget, preparedDir);
+            checkControlSignals();
+            publishPackageState("extracting", "正在组装 OBB 并准备 APK", downloadedBytesForPackage(),
+                90.0, activePackagePlan.files.size(), true, null);
+            terminalPrepared = preparePackageArtifacts(entriesDir, apkTarget, obbTarget);
+            DownloadFileUtils.deleteRecursively(workDir);
+            terminalStatus = "ready";
+            terminalMessage = "APK 和 OBB 已准备完成";
+        } catch (PausedException ignored) {
+            terminalStatus = "paused";
+            terminalMessage = "下载已暂停，稍后可以继续";
+        } catch (CancelledException ignored) {
+            cancelled = true;
+        } catch (Exception error) {
+            terminalStatus = "error";
+            terminalMessage = error.getMessage() == null || error.getMessage().isBlank()
+                ? error.getClass().getSimpleName()
+                : error.getMessage();
+        } finally {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+            finishPackageWorker(terminalStatus, terminalMessage, terminalPrepared, cancelled);
+            RUNNING.set(false);
+            stopForeground(false);
+            stopSelfResult(startId);
+        }
+    }
+
+    /** 只清同一套下载根目录里的历史残留；不同版本的工作目录直接删掉。 */
+    private void preparePackageWork(File downloadsRoot, File currentWorkDir, File preparedDir) throws IOException {
+        File[] children = downloadsRoot.listFiles();
+        if (children != null) {
+            for (File child : children) {
+                if (child.getName().startsWith("package-") && !child.equals(currentWorkDir)) {
+                    DownloadFileUtils.deleteRecursively(child);
+                }
+            }
+        }
+        DownloadFileUtils.ensureDirectory(currentWorkDir);
+        DownloadFileUtils.ensureDirectory(preparedDir);
+    }
+
+    private File packageFileTarget(GamePackagePlan.FileEntry entry, File entriesDir, File apkTarget, File preparedDir) {
+        if (entry.isApk()) {
+            return apkTarget;
+        }
+        if (entry.isObbEntry()) {
+            return new File(entriesDir, entry.path.replace('/', File.separatorChar));
+        }
+        return new File(preparedDir, new File(entry.path).getName());
+    }
+
+    private void downloadPackageFiles(File entriesDir, File apkTarget, File preparedDir) throws Exception {
+        int total = activePackagePlan.files.size();
+        int index = 0;
+        for (GamePackagePlan.FileEntry entry : activePackagePlan.files) {
+            checkControlSignals();
+            index++;
+            File target = packageFileTarget(entry, entriesDir, apkTarget, preparedDir);
+            if (target.isFile() && target.length() == entry.sizeBytes
+                && DownloadFileUtils.hashMatches(target, entry.sha256)) {
+                verifiedFiles = Math.max(verifiedFiles, index);
+                publishPackageState("verifying", "已校验 " + index + " / " + total + " 个文件",
+                    downloadedBytesForPackage(), packagePercent(), index, true, null);
+                continue;
+            }
+            DownloadFileUtils.deleteFile(target);
+
+            Exception lastError = null;
+            for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                checkControlSignals();
+                try {
+                    packageDownloader.download(entry, target);
+                    if (target.length() != entry.sizeBytes) {
+                        throw new IOException("文件大小不正确：" + entry.path);
+                    }
+                    publishPackageState("verifying", "正在校验 " + new File(entry.path).getName(),
+                        downloadedBytesForPackage(), packagePercent(), index, true, null);
+                    if (!DownloadFileUtils.hashMatches(target, entry.sha256)) {
+                        DownloadFileUtils.deleteFile(target);
+                        throw new IOException("校验失败：" + entry.path);
+                    }
+                    verifiedFiles = index;
+                    lastError = null;
+                    break;
+                } catch (PausedException | CancelledException control) {
+                    throw control;
+                } catch (Exception error) {
+                    lastError = error;
+                    if (attempt < MAX_ATTEMPTS) {
+                        publishPackageState("downloading",
+                            "连接中断，正在重试 " + (attempt + 1) + " / " + MAX_ATTEMPTS,
+                            downloadedBytesForPackage(), packagePercent(), index, true, null);
+                        sleepWithControl(500L * attempt);
+                    }
+                }
+            }
+            if (lastError != null) {
+                throw new IOException("下载失败：" + entry.path + "：" + lastError.getMessage(), lastError);
+            }
+            publishPackageState("downloading", "已完成 " + index + " / " + total + " 个文件",
+                downloadedBytesForPackage(), packagePercent(), index, true, null);
+        }
+    }
+
+    /**
+     * APK 在下载时已经直接落到 prepared，OBB 在这里按旁车顺序组装：
+     * 这次下过的条目用下载件，没下的从已安装的 OBB 里搬（见 ObbAssembler 注释）。
+     */
+    private PreparedFiles preparePackageArtifacts(File entriesDir, File apkTarget, File obbTarget) throws Exception {
+        if (!apkTarget.isFile() || apkTarget.length() <= 0) {
+            throw new IOException("没有找到下载好的 APK");
+        }
+        if (obbTarget != null && !activePackagePlan.obbEntries.isEmpty()) {
+            Map<String, File> staged = new HashMap<>();
+            for (String entryPath : activePackagePlan.obbEntries) {
+                File stagedFile = new File(entriesDir, entryPath.replace('/', File.separatorChar));
+                if (stagedFile.isFile()) {
+                    staged.put(entryPath, stagedFile);
+                }
+            }
+            new ObbAssembler(new ObbAssembler.Host() {
+                @Override
+                public void publishProgress(String message, boolean force) {
+                    publishPackageState("extracting", message, downloadedBytesForPackage(), 95.0,
+                        activePackagePlan.files.size(), force, null);
+                }
+
+                @Override
+                public void checkControlSignals() throws Exception {
+                    GameDownloadService.this.checkControlSignals();
+                }
+            }).assemble(obbTarget, activePackagePlan.obbEntries, staged, obbTarget);
+            if (obbTarget.getParentFile() != null) {
+                installer.removeStaleObbFiles(obbTarget.getParentFile(), obbTarget);
+            }
+        }
+        return new PreparedFiles(apkTarget, obbTarget, UUID.randomUUID().toString());
+    }
+
+    private void publishPackageProgress(String message, boolean force) {
+        publishPackageState("downloading", message, downloadedBytesForPackage(), packagePercent(),
+            Math.min(verifiedFiles + 1, activePackagePlan == null ? 0 : activePackagePlan.files.size()),
+            force, null);
+    }
+
+    private long downloadedBytesForPackage() {
+        if (activePackagePlan == null) {
+            return 0L;
+        }
+        File downloadsRoot = LauncherStorage.downloadsRoot(this);
+        File entriesDir = new File(new File(downloadsRoot, "package-" + activePackagePlan.version), "entries");
+        File preparedDir = new File(downloadsRoot, "prepared");
+        File apkTarget = new File(preparedDir, "CrossingVoid-latest.apk");
+        long total = 0L;
+        for (GamePackagePlan.FileEntry entry : activePackagePlan.files) {
+            File target = packageFileTarget(entry, entriesDir, apkTarget, preparedDir);
+            if (target.isFile()) {
+                total += Math.min(entry.sizeBytes, Math.max(0L, target.length()));
+            }
+        }
+        return total;
+    }
+
+    private long missingPackageBytes(File entriesDir, File apkTarget, File preparedDir) {
+        if (activePackagePlan == null) {
+            return 0L;
+        }
+        long total = 0L;
+        for (GamePackagePlan.FileEntry entry : activePackagePlan.files) {
+            File target = packageFileTarget(entry, entriesDir, apkTarget, preparedDir);
+            if (target.isFile() && target.length() == entry.sizeBytes) {
+                continue;
+            }
+            total += entry.sizeBytes;
+        }
+        return total;
+    }
+
+    /** 组装 OBB 的额外空间：新 OBB 要写一份完整大小。 */
+    private long packageObbBytes() {
+        if (activePackagePlan == null || activePackagePlan.obbEntries.isEmpty()) {
+            return 0L;
+        }
+        long total = 0L;
+        for (String entryPath : activePackagePlan.obbEntries) {
+            GamePackagePlan.FileEntry entry = activePackagePlan.fileByPath(entryPath);
+            if (entry != null) {
+                total += entry.sizeBytes;
+            }
+        }
+        return total;
+    }
+
+    private double packagePercent() {
+        if (activePackagePlan == null || activePackagePlan.totalBytes <= 0) {
+            return 0.0;
+        }
+        return Math.min(85.0, downloadedBytesForPackage() / (double) activePackagePlan.totalBytes * 85.0);
+    }
+
+    private void publishPackageState(String status, String message, long downloadedBytes, double percent,
+        int currentFile, boolean force, PreparedFiles prepared) {
+        long now = System.currentTimeMillis();
+        if (!force && now - lastStateAt < STATE_INTERVAL_MS) {
+            return;
+        }
+        lastStateAt = now;
+        updateTransferRate(status, downloadedBytes, now);
+        JSONObject state = new JSONObject();
+        try {
+            state.put("status", status);
+            state.put("message", message);
+            state.put("version", activePackagePlan == null ? "" : activePackagePlan.version);
+            state.put("source", activePackagePlan == null ? "" : activePackagePlan.source);
+            state.put("archiveSha256", activePackagePlan == null ? "" : activePackagePlan.apkSha256());
+            state.put("downloadedBytes", Math.max(0L, downloadedBytes));
+            state.put("totalBytes", activePackagePlan == null ? 0L : activePackagePlan.totalBytes);
+            state.put("percent", Math.max(0.0, Math.min(100.0, percent)));
+            state.put("currentChunk", Math.max(0, currentFile));
+            state.put("totalChunks", activePackagePlan == null ? 0 : activePackagePlan.files.size());
+            state.put("downloadedFiles", Math.max(0, currentFile));
+            state.put("totalFiles", activePackagePlan == null ? 0 : activePackagePlan.files.size());
+            state.put("verifiedChunks", verifiedFiles);
+            state.put("bytesPerSecond", bytesPerSecond);
+            state.put("canPause", status.equals("downloading"));
+            state.put("updatedAt", now);
+            if (prepared != null) {
+                state.put("apkPath", prepared.apk.getAbsolutePath());
+                if (prepared.obb != null) {
+                    state.put("obbPath", prepared.obb.getAbsolutePath());
+                    state.put("obbFileName", prepared.obb.getName());
+                }
+                state.put("installToken", prepared.installToken);
+            }
+            if ("ready".equals(status) && activePackagePlan != null) {
+                JSONArray packageFiles = new JSONArray();
+                for (GamePackagePlan.FileEntry entry : activePackagePlan.manifestFiles) {
+                    JSONObject item = new JSONObject();
+                    item.put("path", entry.path);
+                    item.put("sizeBytes", entry.sizeBytes);
+                    item.put("sha256", entry.sha256);
+                    packageFiles.put(item);
+                }
+                state.put("packageFiles", packageFiles);
+                state.put("productKey", activePackagePlan.productKey);
+            }
+        } catch (JSONException error) {
+            throw new IllegalStateException(error);
+        }
+        String logSignature = status + "|" + currentFile + "|" + verifiedFiles + "|" + message;
+        if (!logSignature.equals(lastLoggedStateSignature)) {
+            lastLoggedStateSignature = logSignature;
+            try {
+                LauncherLogStore.append(this, status.equals("error") ? "error" : "info",
+                    "game-package.state", message, state.toString());
+            } catch (Exception ignored) {
+            }
+        }
+        saveAndBroadcastState(state);
+        if (status.equals("downloading") || status.equals("verifying") || status.equals("extracting")) {
+            notifier.update((int) Math.round(percent));
+        }
+    }
+
+    private void finishPackageWorker(String status, String message, PreparedFiles prepared, boolean cancelled) {
+        PAUSE_REQUESTED.set(false);
+        CANCEL_REQUESTED.set(false);
+        if (cancelled) {
+            clearAllDownloads(this);
+            saveAndBroadcastState(idleState());
+            notifier.cancelActive();
+            return;
+        }
+        String terminalStatus = status == null ? "error" : status;
+        String terminalMessage = message == null || message.isBlank() ? "游戏下载任务意外结束" : message;
+        if (terminalStatus.equals("idle")) {
+            saveAndBroadcastState(idleState());
+            return;
+        }
+        long bytes = terminalStatus.equals("ready") && activePackagePlan != null
+            ? activePackagePlan.totalBytes
+            : downloadedBytesForPackage();
+        double percent = terminalStatus.equals("ready") ? 100.0 : packagePercent();
+        int fileIndex = terminalStatus.equals("ready") && activePackagePlan != null
+            ? activePackagePlan.files.size()
+            : Math.min(verifiedFiles + 1, activePackagePlan == null ? 0 : activePackagePlan.files.size());
+        publishPackageState(terminalStatus, terminalMessage, bytes, percent, fileIndex, true, prepared);
+        if (terminalStatus.equals("ready")) notifier.showCompletion();
+        else if (terminalStatus.equals("paused")) notifier.showPaused();
+        else if (terminalStatus.equals("error")) notifier.showError(terminalMessage);
     }
 
     private static final class PausedException extends Exception {

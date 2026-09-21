@@ -12,11 +12,12 @@ import {
 const appSource = readFileSync(resolve(process.cwd(), "src/App.vue"), "utf8");
 
 describe("Android download source preference", () => {
-  it("accepts OSS and Github while defaulting unknown values to Github", () => {
+  it("accepts OSS and Github while defaulting unknown values to the download site", () => {
+    // 清单 v1 的文件只有下载站一份，所以默认值是 official（GitHub 备用源还没适配）。
     expect(normalizeAndroidDownloadSource("official")).toBe("official");
     expect(normalizeAndroidDownloadSource("github")).toBe("github");
-    expect(normalizeAndroidDownloadSource(null)).toBe("github");
-    expect(normalizeAndroidDownloadSource("gitee")).toBe("github");
+    expect(normalizeAndroidDownloadSource(null)).toBe("official");
+    expect(normalizeAndroidDownloadSource("gitee")).toBe("official");
   });
 
   it("persists the selected source without replacing it with an active task source", () => {

@@ -35,7 +35,6 @@ import {
   getLauncherUpdateState,
   exportGameChunks,
   installDownloadedApk,
-  importGameChunks,
   installLauncherUpdate,
   openInstallPermissionSettings,
   openBatteryOptimizationSettings,
@@ -52,19 +51,32 @@ import {
   type NativeLauncherUpdateState,
 } from "./services/androidLauncher";
 import {
-  buildAndroidDownloadPlan,
   launcherPhaseFromNativeState,
   type AndroidDownloadSource,
 } from "./services/downloadPlan";
 import {
+  buildAndroidGameDownloadPlan,
+  fetchAndroidGamePackage,
+  type AndroidGamePackage,
+} from "./services/gamePackageUpdate";
+import { parseGamePackageState } from "./services/gamePackage";
+import {
   readAndroidDownloadSource,
   saveAndroidDownloadSource,
 } from "./services/downloadSource";
-import { githubNetworkWarning, type GithubNetworkStatus } from "./services/githubNetwork";
 import {
-  checkLatestAndroidGame,
-  type AndroidGameUpdateInfo,
-} from "./services/gameUpdate";
+  downloadChannelNotice,
+  isDownloadChannelEnabled,
+  pickAvailableDownloadChannel,
+  resolveDownloadChannelStates,
+  type RemoteDownloadChannels,
+  type RemoteLauncherNotice,
+} from "./services/remoteLauncherInfo";
+import {
+  fetchAndroidDownloadChannels,
+  fetchAndroidLauncherNotice,
+} from "./services/remoteLauncherInfoClient";
+import { githubNetworkWarning, type GithubNetworkStatus } from "./services/githubNetwork";
 import {
   checkLatestAndroidLauncher,
   shouldInstallLauncherUpdate,
@@ -97,12 +109,14 @@ type LauncherPhase =
 type GameManagementAction = "cancelDownload" | "deletePackage" | "clearDownload";
 
 const launcherPages = ["设置", "首页", "公告", "账号", "角色介绍", "视频"] as const;
+/** 本地渠道表：远端文档只按 key 开关，新增渠道在这里加一行即可。 */
+const androidDownloadSources = ["official", "github"] as const;
 
 const gameInfo = ref<AndroidGameInfo | null>(null);
 const launcherInfo = ref<AndroidLauncherInfo | null>(null);
 const launcherUpdateInfo = ref<AndroidLauncherUpdateManifest | null>(null);
 const launcherTargetVersionName = ref("");
-const updateInfo = ref<AndroidGameUpdateInfo | null>(null);
+const updateInfo = ref<AndroidGamePackage | null>(null);
 const phase = ref<LauncherPhase>("checking");
 const progress = ref(0);
 const statusMessage = ref("正在检测游戏版本");
@@ -128,6 +142,15 @@ const launcherNetworkLocked = computed(() =>
 );
 const trafficQuota = ref<TrafficQuotaStatus | null>(null);
 const trafficQuotaPending = ref(false);
+/** 远程公告：PC 开发页发布，安卓只读。 */
+const remoteLauncherNotice = ref<RemoteLauncherNotice | null>(null);
+const remoteLauncherNoticeError = ref("");
+const noticePending = ref(false);
+const showRemoteLauncherNotice = ref(false);
+/** 远程下载渠道开关：同样来自 PC 开发页。 */
+const remoteDownloadChannels = ref<RemoteDownloadChannels | null>(null);
+/** 自动换源的提示。不放进 operationErrorMessage —— 那个会被下一次"检测版本"清掉。 */
+const channelSwitchNotice = ref("");
 const githubNetworkStatus = ref<GithubNetworkStatus | null>(null);
 const githubNetworkPending = ref(false);
 const operationErrorMessage = ref("");
@@ -152,13 +175,63 @@ const displayedLatestVersion = computed(() =>
     : latestVersionName.value,
 );
 
-const downloadSourceName = computed(() => downloadSource.value === "github" ? "Github 源" : "零境交错源");
+function downloadSourceLabel(source: AndroidDownloadSource) {
+  return source === "github" ? "Github 源" : "零境交错源";
+}
+const downloadSourceName = computed(() => downloadSourceLabel(downloadSource.value));
 const activeDownloadSourceName = computed(() =>
-  (activeDownloadSource.value || downloadSource.value) === "github" ? "Github 源" : "零境交错源",
+  downloadSourceLabel(activeDownloadSource.value || downloadSource.value),
 );
 const downloadSourceLocked = computed(() =>
   isLauncherUpdatePhase.value || ["downloading", "exporting", "verifying", "installing"].includes(phase.value),
 );
+/** 远端开关落到本地渠道表上的结果（远端没提到的渠道默认开放）。 */
+const downloadChannelStates = computed(() =>
+  resolveDownloadChannelStates(androidDownloadSources, remoteDownloadChannels.value),
+);
+/** 当前渠道被 PC 那边关掉时，直接复用首页那条提示。 */
+const downloadChannelWarningText = computed(() =>
+  isDownloadChannelEnabled(downloadChannelStates.value, downloadSource.value)
+    ? ""
+    : "当前渠道已关闭，请更换",
+);
+/** 设置页补充说明：只列"有写明原因"的渠道。 */
+const downloadChannelNoticeText = computed(() =>
+  downloadChannelNotice(downloadChannelStates.value, downloadSourceLabel),
+);
+const officialChannelEnabled = computed(() =>
+  isDownloadChannelEnabled(downloadChannelStates.value, "official"),
+);
+const githubChannelEnabled = computed(() =>
+  isDownloadChannelEnabled(downloadChannelStates.value, "github"),
+);
+const noticeVisible = computed(() => Boolean(remoteLauncherNotice.value?.enabled));
+const noticePublishedText = computed(() => {
+  const publishedAt = remoteLauncherNotice.value?.publishedAt;
+  if (!publishedAt) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(publishedAt));
+});
+const noticeEmptyText = computed(() =>
+  remoteLauncherNoticeError.value
+    ? `公告读取失败：${remoteLauncherNoticeError.value}`
+    : "运营发布会把内容放到这里，当前没有需要您处理的事项。",
+);
+/** 首页只显示最要紧的一条提示。 */
+const homeWarningText = computed(() => {
+  if (launcherUpdateCheckError.value) return launcherUpdateCheckError.value;
+  if (downloadChannelWarningText.value) return downloadChannelWarningText.value;
+  if (channelSwitchNotice.value) return channelSwitchNotice.value;
+  if (operationErrorMessage.value) return operationErrorMessage.value;
+  if (phase.value === "error") return statusMessage.value;
+  return "";
+});
 const canExportGameChunks = computed(() =>
   ["ready", "error"].includes(nativeDownloadStatus.value) &&
   totalChunks.value > 0 &&
@@ -172,13 +245,13 @@ const progressDetailText = computed(() => {
   if (isLauncherUpdatePhase.value) return "更新来源：Gitee";
   if (totalChunks.value <= 0) return "准备下载";
   if (nativeDownloadStatus.value === "verifying") {
-    return `已校验 ${Math.min(verifiedChunks.value, totalChunks.value)} / ${totalChunks.value} 片`;
+    return `已校验 ${Math.min(verifiedChunks.value, totalChunks.value)} / ${totalChunks.value} 个文件`;
   }
   if (nativeDownloadStatus.value === "exporting") {
     return `正在导出第 ${Math.max(1, currentChunk.value)} / ${totalChunks.value} 项`;
   }
   if (["downloading", "paused"].includes(nativeDownloadStatus.value)) {
-    return `第 ${Math.max(1, currentChunk.value)} / ${totalChunks.value} 片`;
+    return `第 ${Math.max(1, currentChunk.value)} / ${totalChunks.value} 个文件`;
   }
   return "等待下载";
 });
@@ -215,10 +288,10 @@ const trafficQuotaExpiryText = computed(() => {
   if (Number.isNaN(date.getTime())) return "";
   return `最近到期 ${new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date)}`;
 });
+// 官方源正常时不再提示任何东西（原来那句"可以在启动器主界面顶部支持一下作者"已去掉，
+// 和 PC 端对齐 —— 那是开发者口气，不该给玩家看）。只有流量不足才说话。
 const trafficQuotaHint = computed(() =>
-  officialTrafficBlocked.value
-    ? "服务器当前流量不足，请更换下载源。"
-    : "可以在启动器主界面顶部支持一下作者，谢谢了。",
+  officialTrafficBlocked.value ? "服务器当前流量不足，请更换下载源。" : "",
 );
 const githubNetworkWarningText = computed(() =>
   githubNetworkStatus.value ? githubNetworkWarning(githubNetworkStatus.value) : "",
@@ -668,12 +741,15 @@ async function refreshGameStatus() {
   try {
     const [installedGame, latestUpdate, nativeDownload] = await Promise.all([
       checkAndroidGame(),
-      checkLatestAndroidGame(),
+      fetchAndroidGamePackage({
+        officialEnabled: officialChannelEnabled.value,
+        githubEnabled: githubChannelEnabled.value,
+      }),
       getGameDownloadState(),
     ]);
     gameInfo.value = installedGame;
     updateInfo.value = latestUpdate;
-    totalBytes.value = latestUpdate.asset.sizeBytes;
+    totalBytes.value = latestUpdate.files.reduce((sum, file) => sum + file.sizeBytes, 0);
     if (nativeDownload.status !== "idle") {
       applyNativeState(nativeDownload);
       if (nativeDownload.version && nativeDownload.version !== latestUpdate.version) {
@@ -719,6 +795,39 @@ async function refreshTrafficQuota() {
   }
 }
 
+/**
+ * 公告和渠道开关都来自 PC 开发页，安卓只接收。
+ * 公告拉不到就是"没有公告"，渠道文档拉不到就是"全部开放"——
+ * 不能因为一次网络抖动把玩家挡在门外。
+ */
+async function refreshRemoteLauncherNotice() {
+  noticePending.value = true;
+  try {
+    const notice = await fetchAndroidLauncherNotice();
+    remoteLauncherNotice.value = notice;
+    remoteLauncherNoticeError.value = "";
+    showRemoteLauncherNotice.value = notice.enabled;
+  } catch (error) {
+    console.warn("Unable to load remote launcher notice", error);
+    remoteLauncherNotice.value = null;
+    remoteLauncherNoticeError.value = error instanceof Error ? error.message : "公告读取失败";
+    showRemoteLauncherNotice.value = false;
+  } finally {
+    noticePending.value = false;
+  }
+}
+
+/** 当前渠道被关就自动切到还开着的那个；全都关了则保留选择，由下载入口拦下。 */
+async function refreshRemoteDownloadChannels() {
+  channelSwitchNotice.value = "";
+  remoteDownloadChannels.value = await fetchAndroidDownloadChannels();
+  const available = pickAvailableDownloadChannel(downloadChannelStates.value, downloadSource.value);
+  if (available && available !== downloadSource.value) {
+    downloadSource.value = available;
+    channelSwitchNotice.value = `当前下载渠道已关闭，已自动切换到「${downloadSourceLabel(available)}」。`;
+  }
+}
+
 async function refreshGithubNetworkStatus() {
   if (launcherNetworkLocked.value) return;
   if (githubNetworkPending.value) return;
@@ -748,6 +857,15 @@ function ensureOfficialTrafficAvailable() {
   return false;
 }
 
+/** 渠道被 PC 开发页关掉后，下载入口直接拦下并让玩家去设置页换源。 */
+function ensureDownloadChannelAvailable() {
+  if (isDownloadChannelEnabled(downloadChannelStates.value, downloadSource.value)) return true;
+  operationErrorMessage.value = "当前渠道已关闭，请更换";
+  statusMessage.value = operationErrorMessage.value;
+  currentPageIndex.value = 0;
+  return false;
+}
+
 async function pauseOfficialSourceForLowTraffic() {
   if (
     pausingOfficialDownload ||
@@ -758,7 +876,7 @@ async function pauseOfficialSourceForLowTraffic() {
 
   pausingOfficialDownload = true;
   operationErrorMessage.value = "服务器当前流量不足，请更换下载源。";
-  statusMessage.value = "服务器流量不足，正在暂停 OSS 下载";
+  statusMessage.value = "服务器流量不足，正在暂停零境交错源下载";
   try {
     await pauseGameDownload();
   } catch (error) {
@@ -913,20 +1031,35 @@ async function beginRealDownload() {
     await refreshGameStatus();
     return;
   }
+  if (!ensureDownloadChannelAvailable()) return;
   if (downloadSource.value === "official") {
     await refreshTrafficQuota();
     if (!ensureOfficialTrafficAvailable()) return;
   }
   try {
-    const plan = buildAndroidDownloadPlan(updateInfo.value, downloadSource.value);
+    // 清单 v1：本地状态里存着上次装完的文件清单，用它算出"只下变化的那几个"。
+    const nativeState = await getGameDownloadState();
+    const localState = parseGamePackageState({
+      schemaVersion: 1,
+      productKey: updateInfo.value.productKey,
+      version: nativeState.version ?? "",
+      files: nativeState.packageFiles ?? [],
+    });
+    const plan = buildAndroidGameDownloadPlan(updateInfo.value, localState, {
+      source: downloadSource.value,
+      officialEnabled: officialChannelEnabled.value,
+      githubEnabled: githubChannelEnabled.value,
+    });
     activeDownloadSource.value = downloadSource.value;
     nativeDownloadStatus.value = "downloading";
     currentChunk.value = 1;
-    totalChunks.value = plan.chunks.length;
+    totalChunks.value = plan.files.length;
     verifiedChunks.value = 0;
-    totalBytes.value = plan.totalBytes;
+    totalBytes.value = plan.totalBytes || totalBytes.value;
     phase.value = "downloading";
-    statusMessage.value = "正在启动后台下载服务";
+    statusMessage.value = plan.files.length > 0
+      ? `正在启动后台下载服务（${plan.files.length} 个文件需要更新）`
+      : "本地文件已是最新，正在准备安装";
     await startGameDownload(plan);
   } catch (error) {
     phase.value = "error";
@@ -936,28 +1069,10 @@ async function beginRealDownload() {
 }
 
 async function importGameChunksFromDevice() {
+  // 清单 v1 的导入要按 files[] 匹配目录再组装 OBB（规划文档里的后续项），
+  // 老的切片导入只认得 chunks[]，对着新清单会直接失败，所以先明确挡住。
   if (["installing", "readyInstall"].includes(phase.value)) return;
-  try {
-    if (["downloading", "paused", "verifying"].includes(phase.value)) {
-      if (!window.confirm("导入碎片会取消当前下载，并清理已经下载一半的缓存。是否继续？")) return;
-      statusMessage.value = "正在停止当前下载并清理缓存";
-      await cancelGameDownload();
-      await waitForNativeDownloadStatus(["idle"]);
-    }
-    const currentUpdate = updateInfo.value ?? await checkLatestAndroidGame();
-    updateInfo.value = currentUpdate;
-    const plan = buildAndroidDownloadPlan(currentUpdate, downloadSource.value);
-    activeDownloadSource.value = downloadSource.value;
-    totalBytes.value = plan.totalBytes;
-    totalChunks.value = plan.chunks.length;
-    phase.value = "checking";
-    statusMessage.value = "请选择包含全部游戏碎片的文件夹";
-    await importGameChunks(plan);
-  } catch (error) {
-    phase.value = "error";
-    statusMessage.value = error instanceof Error ? error.message : "无法导入游戏碎片";
-    reportFailure("import-game-chunks", error);
-  }
+  statusMessage.value = "碎片导入正在适配新的文件级清单，暂时不可用。";
 }
 
 async function exportGameChunksFromDevice() {
@@ -1020,6 +1135,8 @@ function handleVisibilityChange() {
   if (document.visibilityState === "visible") {
     void refreshLauncherPermissionStatus();
     void refreshTrafficQuota();
+    // 渠道开关可能刚被 PC 开发页改过（例如官方源恢复），回到前台重新对一次。
+    void refreshRemoteDownloadChannels();
   }
   if (document.visibilityState === "visible" && gameInstallPending) {
     gameInstallPending = false;
@@ -1042,6 +1159,8 @@ onMounted(async () => {
   launcherProgressListener = await addLauncherUpdateProgressListener(applyLauncherUpdateState);
   document.addEventListener("visibilitychange", handleVisibilityChange);
   await refreshLauncherPermissionStatus();
+  // 公告和渠道开关来自 PC 开发页：先拉一次，玩家可能正因为某个源被关而进不来。
+  await Promise.all([refreshRemoteLauncherNotice(), refreshRemoteDownloadChannels()]);
   await refreshAllStatus();
   if (!launcherNetworkLocked.value) {
     await Promise.all([
@@ -1106,14 +1225,28 @@ onBeforeUnmount(() => {
                   <span>{{ downloadSourceName }}</span>
                 </div>
                 <div class="source-options" data-settings-section="download" :class="{ locked: downloadSourceLocked }">
-                  <button type="button" :class="{ selected: downloadSource === 'official' }" :disabled="downloadSourceLocked" @click="downloadSource = 'official'">
-                    <strong>零境交错源</strong><span>{{ officialTrafficBlocked ? '流量不足' : '高速下载' }}</span>
+                  <button
+                    type="button"
+                    :class="{ selected: downloadSource === 'official', closed: !officialChannelEnabled }"
+                    :disabled="downloadSourceLocked || !officialChannelEnabled"
+                    @click="downloadSource = 'official'"
+                  >
+                    <strong>零境交错源</strong>
+                    <span>{{ officialChannelEnabled ? (officialTrafficBlocked ? '流量不足' : '高速下载') : '已关闭' }}</span>
                   </button>
-                  <button type="button" :class="{ selected: downloadSource === 'github' }" :disabled="downloadSourceLocked" @click="downloadSource = 'github'">
-                    <strong>Github 源</strong><span>需要魔法</span>
+                  <button
+                    type="button"
+                    :class="{ selected: downloadSource === 'github', closed: !githubChannelEnabled }"
+                    :disabled="downloadSourceLocked || !githubChannelEnabled"
+                    @click="downloadSource = 'github'"
+                  >
+                    <strong>Github 源</strong>
+                    <span>{{ githubChannelEnabled ? '需要魔法' : '已关闭' }}</span>
                   </button>
                 </div>
-                <p v-if="downloadSourceLocked" class="settings-hint">请先暂停当前任务，再切换下载源。</p>
+                <p v-if="downloadChannelWarningText" class="settings-hint">{{ downloadChannelWarningText }}</p>
+                <p v-else-if="downloadSourceLocked" class="settings-hint">请先暂停当前任务，再切换下载源。</p>
+                <p v-if="downloadChannelNoticeText" class="settings-hint note">{{ downloadChannelNoticeText }}</p>
               </section>
 
               <section v-if="downloadSource === 'official'" class="traffic-quota" :class="{ low: officialTrafficBlocked, unavailable: !trafficQuota?.available }">
@@ -1122,7 +1255,7 @@ onBeforeUnmount(() => {
                   <span>{{ trafficQuotaText }}</span>
                 </div>
                 <div v-if="trafficQuota?.available" class="traffic-quota-track" aria-hidden="true"><span :style="{ width: `${trafficQuotaPercent}%` }"></span></div>
-                <small>{{ officialTrafficBlocked ? trafficQuotaHint : trafficQuotaExpiryText || trafficQuotaHint }}</small>
+                <small>{{ officialTrafficBlocked ? trafficQuotaHint : trafficQuotaExpiryText }}</small>
               </section>
 
               <section v-else class="github-network-status" :class="{ warning: Boolean(githubNetworkWarningText) }">
@@ -1184,7 +1317,7 @@ onBeforeUnmount(() => {
           <div class="home-center">
             <p class="world-label">Crossing Void · illusion Dreamland</p>
             <h1>零境交错：空界幻境</h1>
-            <p v-if="launcherUpdateCheckError || operationErrorMessage || phase === 'error'" class="update-warning"><CircleAlert :size="18" />{{ launcherUpdateCheckError || operationErrorMessage || statusMessage }}</p>
+            <p v-if="homeWarningText" class="update-warning"><CircleAlert :size="18" />{{ homeWarningText }}</p>
             <button class="primary-action" type="button" :disabled="actionDisabled" @click="handlePrimaryAction">
               <component :is="actionIcon" :size="48" :class="{ spinning: primaryActionSpinning }" />
               <span>{{ actionText }}</span>
@@ -1194,7 +1327,23 @@ onBeforeUnmount(() => {
         </section>
 
         <section class="page" :class="{ active: currentPageIndex === 2, 'exit-left': currentPageIndex > 2 }" aria-label="公告">
-          <article class="article"><Megaphone :size="30" /><time>2026 / 07 / 20</time><h2>Android 启动器测试</h2><p>启动器更新会优先于游戏更新检查。下载中断后将保留已经校验完成的资源分块。</p><h3>当前测试内容</h3><ul><li>启动器独立热更新</li><li>APK 与 OBB 分片下载</li><li>OSS 与 Github 下载源切换</li></ul></article>
+          <article class="article" :class="noticeVisible ? remoteLauncherNotice?.level : 'empty'">
+            <header class="article-header">
+              <Megaphone :size="30" />
+              <time>{{ noticeVisible ? noticePublishedText : '暂无公告' }}</time>
+            </header>
+            <template v-if="noticeVisible && remoteLauncherNotice">
+              <h2>{{ remoteLauncherNotice.title }}</h2>
+              <p>{{ remoteLauncherNotice.content }}</p>
+            </template>
+            <template v-else>
+              <h2>当前没有新公告</h2>
+              <p>{{ noticeEmptyText }}</p>
+            </template>
+            <button class="notice-refresh" type="button" :disabled="noticePending" @click="refreshRemoteLauncherNotice">
+              <RefreshCw :size="18" :class="{ spinning: noticePending }" />{{ noticePending ? '正在刷新' : '刷新公告' }}
+            </button>
+          </article>
         </section>
 
         <section class="page" :class="{ active: currentPageIndex === 3, 'exit-left': currentPageIndex > 3 }" aria-label="账号">
@@ -1233,6 +1382,22 @@ onBeforeUnmount(() => {
           </span>
           <span class="global-percent"><strong>{{ Math.round(progress) }}%</strong><small>{{ displayedLatestVersion }}</small></span>
         </button>
+      </Transition>
+
+      <Transition name="notice-pop">
+        <div v-if="showRemoteLauncherNotice && remoteLauncherNotice" class="remote-notice-mask">
+          <section class="remote-notice-panel" :class="remoteLauncherNotice.level" role="dialog" aria-label="公告">
+            <header>
+              <CircleAlert :size="30" stroke-width="2.5" />
+              <div>
+                <span>公告</span>
+                <h2>{{ remoteLauncherNotice.title }}</h2>
+              </div>
+            </header>
+            <p>{{ remoteLauncherNotice.content }}</p>
+            <button type="button" @click="showRemoteLauncherNotice = false">知道了</button>
+          </section>
+        </div>
       </Transition>
     </section>
   </main>

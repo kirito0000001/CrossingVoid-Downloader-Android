@@ -1,6 +1,8 @@
 import { Capacitor } from "@capacitor/core";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type { AndroidDownloadPlan } from "./downloadPlan";
+import type { AndroidGameDownloadPlan } from "./gamePackageUpdate";
+import type { GamePackageFile } from "./gamePackage";
 import type { AndroidLauncherUpdateManifest } from "./launcherUpdate";
 
 export type AndroidLauncherInfo = {
@@ -73,6 +75,12 @@ export type NativeDownloadState = {
   apkPath?: string;
   obbPath?: string;
   obbFileName?: string;
+  /** 清单 v1 的文件级计数（老的切片流程不带这两个字段）。 */
+  downloadedFiles?: number;
+  totalFiles?: number;
+  /** 安装成功后写回的文件清单，下次用它算差异。 */
+  packageFiles?: GamePackageFile[];
+  productKey?: string;
 };
 
 type AndroidLauncherPlugin = {
@@ -89,7 +97,7 @@ type AndroidLauncherPlugin = {
   installDownloadedApk(): Promise<{ started: boolean }>;
   importGameChunks(options: { plan: AndroidDownloadPlan }): Promise<{ started: boolean }>;
   exportGameChunks(): Promise<{ started: boolean }>;
-  startDownload(options: { plan: AndroidDownloadPlan }): Promise<{ started: boolean }>;
+  startDownload(options: { plan: AndroidGameDownloadPlan | AndroidDownloadPlan }): Promise<{ started: boolean }>;
   pauseDownload(): Promise<{ paused: boolean }>;
   cancelDownload(): Promise<{ cancelled: boolean }>;
   getDownloadState(): Promise<NativeDownloadState>;
@@ -180,7 +188,7 @@ export async function installDownloadedApk() {
   return plugin.installDownloadedApk();
 }
 
-export async function startGameDownload(plan: AndroidDownloadPlan) {
+export async function startGameDownload(plan: AndroidGameDownloadPlan | AndroidDownloadPlan) {
   if (Capacitor.getPlatform() !== "android") throw new Error("真实下载需要在 Android 启动器中运行");
   return plugin.startDownload({ plan });
 }

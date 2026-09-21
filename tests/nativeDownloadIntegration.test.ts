@@ -26,7 +26,9 @@ const apkValidatorSource = readFileSync(
 
 describe("native Android game download integration", () => {
   it("uses the foreground native downloader instead of the simulated timer", () => {
-    expect(appSource).toContain("buildAndroidDownloadPlan");
+    // 清单 v1：前端用共用内核算出差异计划，再交给同一个前台原生服务下载。
+    expect(appSource).toContain("fetchAndroidGamePackage");
+    expect(appSource).toContain("buildAndroidGameDownloadPlan");
     expect(appSource).toContain("startGameDownload");
     expect(appSource).toContain("addDownloadProgressListener");
     expect(appSource).not.toContain("simulateDownload");

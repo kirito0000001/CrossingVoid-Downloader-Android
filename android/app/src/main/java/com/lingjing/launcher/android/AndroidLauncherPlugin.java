@@ -342,8 +342,12 @@ public class AndroidLauncherPlugin extends Plugin {
             return;
         }
         Intent intent = new Intent(getContext(), GameDownloadService.class);
-        intent.setAction(GameDownloadService.ACTION_START);
-        intent.putExtra(GameDownloadService.EXTRA_PLAN, plan.toString());
+        String planJson = plan.toString();
+        // 按计划形状路由：清单 v1 带 files[]，老的切片流程带 chunks[]。
+        // 过渡期两条都能跑，前端切过来之后老分支自然就没人用了。
+        boolean packagePlan = plan.has("files") && !plan.has("chunks");
+        intent.setAction(packagePlan ? GameDownloadService.ACTION_START_PACKAGE : GameDownloadService.ACTION_START);
+        intent.putExtra(GameDownloadService.EXTRA_PLAN, planJson);
         ContextCompat.startForegroundService(getContext(), intent);
         JSObject result = new JSObject();
         result.put("started", true);

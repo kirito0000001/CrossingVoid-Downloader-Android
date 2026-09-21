@@ -537,10 +537,19 @@ button {
   opacity: 0.48;
 }
 
+.source-options button.closed {
+  border-style: dashed;
+  opacity: 0.56;
+}
+
 .settings-hint {
   margin: 8px 0 0;
   color: var(--cv-danger);
   font-size: 12px;
+}
+
+.settings-hint.note {
+  color: var(--cv-muted);
 }
 
 .traffic-quota {
@@ -744,6 +753,7 @@ button {
 
 .article {
   height: 100%;
+  overflow-y: auto;
   padding: 30px;
   padding: clamp(20px, 4vw, 38px);
   border: 1px solid rgba(255, 255, 255, 0.13);
@@ -760,6 +770,55 @@ button {
   color: var(--cv-gold);
   font-family: "CVTitle", "Microsoft YaHei UI", sans-serif;
   font-size: 30px;
+}
+
+.article-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--cv-gold);
+}
+
+.article-header time {
+  margin-left: 0;
+}
+
+.article.warning .article-header,
+.article.warning h2 {
+  color: #ffcf7a;
+}
+
+.article.error .article-header,
+.article.error h2 {
+  color: var(--cv-danger);
+}
+
+.article.empty .article-header,
+.article.empty h2 {
+  color: var(--cv-muted);
+}
+
+.article > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notice-refresh {
+  margin-top: 22px;
+  min-height: 46px;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.86);
+  background: rgba(12, 18, 23, 0.84);
+  font-weight: 900;
+}
+
+.notice-refresh:disabled {
+  opacity: 0.48;
 }
 
 .video-page {
@@ -928,6 +987,96 @@ button {
   animation: spin 1s linear infinite;
 }
 
+/* 公告弹窗：和 PC 端一样由远程公告驱动，安卓只是换个更适合触屏的尺寸。 */
+.remote-notice-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  padding: 22px;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 5, 8, 0.78);
+  backdrop-filter: blur(4px);
+}
+
+.remote-notice-panel {
+  width: min(680px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 22px;
+  border: 1px solid rgba(242, 204, 103, 0.42);
+  border-radius: 6px;
+  background: var(--cv-panel);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.56);
+}
+
+.remote-notice-panel.warning {
+  border-color: rgba(216, 176, 79, 0.8);
+}
+
+.remote-notice-panel.error {
+  border-color: rgba(201, 94, 94, 0.84);
+}
+
+.remote-notice-panel header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--cv-gold);
+}
+
+.remote-notice-panel.warning header {
+  color: #e2b94f;
+}
+
+.remote-notice-panel.error header {
+  color: var(--cv-danger);
+}
+
+.remote-notice-panel header span {
+  color: var(--cv-muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.remote-notice-panel h2 {
+  margin: 3px 0 0;
+  color: var(--cv-ink);
+  font-family: "CVTitle", "Microsoft YaHei UI", sans-serif;
+  font-size: 26px;
+}
+
+.remote-notice-panel > p {
+  max-height: 46vh;
+  overflow-y: auto;
+  margin: 20px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.remote-notice-panel > button {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid rgba(242, 204, 103, 0.5);
+  border-radius: 4px;
+  color: #1b1a16;
+  background: var(--cv-gold-strong);
+  font-weight: 950;
+}
+
+.notice-pop-enter-active,
+.notice-pop-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.notice-pop-enter-from,
+.notice-pop-leave-to {
+  opacity: 0;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -985,7 +1134,9 @@ button {
   .dot::before,
   .pager,
   .task-dock-enter-active,
-  .task-dock-leave-active {
+  .task-dock-leave-active,
+  .notice-pop-enter-active,
+  .notice-pop-leave-active {
     transition-duration: 0.01ms;
   }
 
