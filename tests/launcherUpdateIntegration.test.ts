@@ -176,6 +176,11 @@ describe("Android launcher hot update integration", () => {
     expect(pluginSource).toContain("launcherInstallResult");
     expect(pluginSource).toContain("Activity.RESULT_OK");
     expect(pluginSource).toContain("startActivity(launchIntent)");
+    // 这条广播正好在"启动器刚被覆盖安装完"那一刻派发，而 BroadcastReceiver 里漏出去的异常
+    // 会直接崩掉进程 —— 现场就是"更新完启动器闪退"。所以整段要包在 try/catch 里，
+    // NotificationManager 也要判空（拿不到时宁可不发提示）。
+    expect(replacedReceiverSource).toContain("} catch (Exception error) {");
+    expect(replacedReceiverSource).toContain("if (channelManager != null)");
   });
 
   it("keeps equal-versionCode update state until the semantic launcher version is installed", () => {
