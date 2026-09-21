@@ -40,6 +40,7 @@ import {
   openBatteryOptimizationSettings,
   pauseGameDownload,
   startGameDownload,
+  importGameChunks,
   startLauncherUpdate,
   setLauncherNetworkAccess,
   uploadLauncherLog,
@@ -1068,11 +1069,40 @@ async function beginRealDownload() {
   }
 }
 
+/**
+ * 导入碎片：玩家自己从网盘 / QQ 群拿到的那批文件。
+ *
+ * 用的清单和下载那条链路是**同一个**（`buildAndroidGameDownloadPlan`）——
+ * 原生侧靠它对到和下载一样的落点，所以导入和下载不会有两套"怎么装"的逻辑。
+ * 已经对上的文件原生侧会跳过，导到一半中断、再点一次接着来。
+ */
 async function importGameChunksFromDevice() {
-  // 清单 v1 的导入要按 files[] 匹配目录再组装 OBB（规划文档里的后续项），
-  // 老的切片导入只认得 chunks[]，对着新清单会直接失败，所以先明确挡住。
   if (["installing", "readyInstall"].includes(phase.value)) return;
-  statusMessage.value = "碎片导入正在适配新的文件级清单，暂时不可用。";
+  if (!updateInfo.value) {
+    statusMessage.value = "还没拿到游戏清单，先刷新一次状态再导入碎片";
+    return;
+  }
+  try {
+    const nativeState = await getGameDownloadState();
+    const localState = parseGamePackageState({
+      schemaVersion: 1,
+      productKey: updateInfo.value.productKey,
+      version: nativeState.version ?? "",
+      files: nativeState.packageFiles ?? [],
+    });
+    const plan = buildAndroidGameDownloadPlan(updateInfo.value, localState, {
+      source: downloadSource.value,
+      officialEnabled: officialChannelEnabled.value,
+      githubEnabled: githubChannelEnabled.value,
+    });
+    phase.value = "verifying";
+    statusMessage.value = "请选择放着碎片的文件夹";
+    await importGameChunks(plan);
+  } catch (error) {
+    phase.value = "error";
+    statusMessage.value = error instanceof Error ? error.message : "无法导入游戏碎片";
+    reportFailure("import-game-chunks", error);
+  }
 }
 
 async function exportGameChunksFromDevice() {

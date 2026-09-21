@@ -95,7 +95,7 @@ type AndroidLauncherPlugin = {
   openInstallPermissionSettings(): Promise<{ opened: boolean }>;
   openBatteryOptimizationSettings(): Promise<{ opened: boolean; directRequest: boolean }>;
   installDownloadedApk(): Promise<{ started: boolean }>;
-  importGameChunks(options: { plan: AndroidDownloadPlan }): Promise<{ started: boolean }>;
+  importGameChunks(options: { plan: AndroidGameDownloadPlan | AndroidDownloadPlan }): Promise<{ started: boolean }>;
   exportGameChunks(): Promise<{ started: boolean }>;
   startDownload(options: { plan: AndroidGameDownloadPlan | AndroidDownloadPlan }): Promise<{ started: boolean }>;
   pauseDownload(): Promise<{ paused: boolean }>;
@@ -193,7 +193,13 @@ export async function startGameDownload(plan: AndroidGameDownloadPlan | AndroidD
   return plugin.startDownload({ plan });
 }
 
-export async function importGameChunks(plan: AndroidDownloadPlan) {
+/**
+ * 导入碎片：玩家自己从网盘 / QQ 群拿到的那批文件。
+ *
+ * 传的清单和下载那条链路是**同一个**（`buildAndroidGameDownloadPlan` 的产物）——
+ * 原生侧靠它把碎片对到和下载一样的位置，所以两边永远一致。
+ */
+export async function importGameChunks(plan: AndroidGameDownloadPlan | AndroidDownloadPlan) {
   if (Capacitor.getPlatform() !== "android") throw new Error("导入游戏碎片需要在 Android 启动器中运行");
   return plugin.importGameChunks({ plan });
 }

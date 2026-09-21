@@ -231,7 +231,14 @@ public class GameDownloadService extends Service {
             CANCEL_REQUESTED.set(false);
             LauncherStorage.prefs(this).edit().putString(LauncherStorage.PREF_PLAN, importPlan).apply();
             notifier.startForeground(0);
-            executor.execute(() -> runImport(importPlan, Uri.parse(importTreeUri), startId));
+            // 逐文件清单（v1）走 package 导入：碎片是散件 + 压缩包，按清单路径对，
+            // 落点和下载那条链路完全一样（packageFileTarget + preparePackageArtifacts），
+            // 所以组装 OBB 那段不用另写一份。
+            // 老的分片清单（chunks[]）留着兼容，但线上已经不发那种包了。
+            boolean packagePlan = GameDownloadService.looksLikePackagePlan(importPlan);
+            executor.execute(() -> packagePlan
+                ? runPackageImport(importPlan, Uri.parse(importTreeUri), startId)
+                : runImport(importPlan, Uri.parse(importTreeUri), startId));
             return START_NOT_STICKY;
         }
 
@@ -796,6 +803,128 @@ public class GameDownloadService extends Service {
             stopForeground(false);
             stopSelfResult(startId);
         }
+    }
+
+    /** 这个清单是不是逐文件（v1）的：有 `files[]` 就是。 */
+    private static boolean looksLikePackagePlan(String planJson) {
+        try {
+            return new JSONObject(planJson).has("files");
+        } catch (JSONException error) {
+            return false;
+        }
+    }
+
+    /**
+     * 导入碎片：玩家自己从网盘 / QQ 群拿到的那批文件。
+     *
+     * 落点和下载那条链路**完全一致** —— 先按清单把文件对到 {@code packageFileTarget} 说的位置，
+     * 全齐了再走同一个 {@code preparePackageArtifacts} 组装 OBB。所以这里没有第二套"怎么装"的逻辑。
+     * 已经对上的文件不会重拷，导到一半中断、再点一次接着来。
+     */
+    private void runPackageImport(String planJson, Uri treeUri, int startId) {
+        PowerManager.WakeLock wakeLock = null;
+        String terminalStatus = null;
+        String terminalMessage = null;
+        PreparedFiles terminalPrepared = null;
+        boolean cancelled = false;
+        try {
+            PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CrossingVoidLauncher:GameImport");
+            wakeLock.acquire(6L * 60L * 60L * 1000L);
+
+            activePackagePlan = GamePackagePlan.parse(planJson);
+            LauncherStorage.prefs(this).edit()
+                .putString(LauncherStorage.PREF_PLAN, planJson).apply();
+
+            File downloadsRoot = LauncherStorage.downloadsRoot(this);
+            File workDir = new File(downloadsRoot, "package-" + activePackagePlan.version);
+            File entriesDir = new File(workDir, "entries");
+            File preparedDir = new File(downloadsRoot, "prepared");
+            File apkTarget = new File(preparedDir, "CrossingVoid-latest.apk");
+            File obbDir = getObbDir();
+            File obbTarget = activePackagePlan.obbFileName.isEmpty() || obbDir == null
+                ? null
+                : new File(obbDir, activePackagePlan.obbFileName);
+
+            preparePackageWork(downloadsRoot, workDir, preparedDir);
+            JSONObject previous = readStateObject(this);
+            verifiedFiles = activePackagePlan.matchesState(previous) ? previous.optInt("verifiedFiles", 0) : 0;
+            verifiedFiles = Math.max(0, Math.min(verifiedFiles, activePackagePlan.files.size()));
+
+            DocumentFile root = DocumentFile.fromTreeUri(this, treeUri);
+            if (root == null || !root.isDirectory()) {
+                throw new IOException("无法读取选择的碎片文件夹。");
+            }
+
+            publishPackageState("verifying", "正在核对碎片…", 0, 0, 0, true, null);
+            PackageFragmentImporter.Result result = new PackageFragmentImporter(getContentResolver())
+                .importFrom(root, activePackagePlan, new PackageFragmentImporter.Host() {
+                    @Override
+                    public void checkControlSignals() throws Exception {
+                        GameDownloadService.this.checkControlSignals();
+                    }
+
+                    @Override
+                    public File targetFor(GamePackagePlan.FileEntry entry) {
+                        return packageFileTarget(entry, entriesDir, apkTarget, preparedDir);
+                    }
+
+                    @Override
+                    public void publishProgress(String message, int index, int total, boolean force) {
+                        verifiedFiles = Math.max(verifiedFiles, index);
+                        publishPackageState("verifying", message, downloadedBytesForPackage(),
+                            packagePercent(), Math.min(index, total), force, null);
+                    }
+                });
+
+            if (!result.isComplete()) {
+                terminalStatus = "paused";
+                terminalMessage = describeImportGaps(result);
+                return;
+            }
+
+            checkControlSignals();
+            publishPackageState("extracting", "正在组装 OBB 并准备 APK", downloadedBytesForPackage(),
+                90.0, activePackagePlan.files.size(), true, null);
+            terminalPrepared = preparePackageArtifacts(entriesDir, apkTarget, obbTarget);
+            DownloadFileUtils.deleteRecursively(workDir);
+            terminalStatus = "ready";
+            terminalMessage = "碎片导入完成，APK 和 OBB 已准备完成";
+        } catch (PausedException ignored) {
+            terminalStatus = "paused";
+            terminalMessage = "导入已暂停，已经对上的文件会保留";
+        } catch (CancelledException ignored) {
+            cancelled = true;
+        } catch (Exception error) {
+            terminalStatus = "error";
+            terminalMessage = error.getMessage() == null || error.getMessage().isBlank()
+                ? error.getClass().getSimpleName()
+                : error.getMessage();
+        } finally {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+            finishPackageWorker(terminalStatus, terminalMessage, terminalPrepared, cancelled);
+            RUNNING.set(false);
+            stopForeground(false);
+            stopSelfResult(startId);
+        }
+    }
+
+    /** 缺哪些、哪些对不上 —— 只列前三个，没必要把几十条路径塞给玩家。 */
+    private static String describeImportGaps(PackageFragmentImporter.Result result) {
+        List<String> parts = new ArrayList<>();
+        if (!result.missing.isEmpty()) {
+            parts.add("缺 " + result.missing.size() + " 个（" + joinFirstPaths(result.missing) + "）");
+        }
+        if (!result.mismatched.isEmpty()) {
+            parts.add("有 " + result.mismatched.size() + " 个内容对不上（" + joinFirstPaths(result.mismatched) + "）");
+        }
+        return "碎片还不齐：" + String.join("；", parts) + "。补齐后再点一次导入，已经对上的不会重拷。";
+    }
+
+    private static String joinFirstPaths(List<String> paths) {
+        return String.join("、", paths.subList(0, Math.min(3, paths.size())));
     }
 
     /** 只清同一套下载根目录里的历史残留；不同版本的工作目录直接删掉。 */
