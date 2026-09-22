@@ -68,6 +68,12 @@ export type AndroidDownloadFile = GamePackageFile & {
 export type AndroidGameDownloadPlan = {
   productKey: string;
   runtime: "Android";
+  /**
+   * 这次用的是哪个下载源。原生侧把它写进状态给界面显示（"下载源：github"），
+   * 不参与下载逻辑 —— 但**必须有**：原生那边是照着字段名读的，
+   * 少一个字段整单解析就会炸（2026-09-22 安卓"一点下载就弹重新检测"就是这个）。
+   */
+  source: "official" | "github";
   version: string;
   baseUrl: string;
   /** 本次真正要下的文件（sha256 变了的那些）。 */
@@ -211,6 +217,7 @@ export function buildAndroidGameDownloadPlan(
   return {
     productKey: pkg.productKey,
     runtime: "Android",
+    source: preferred,
     version: pkg.version,
     baseUrl: pkg.baseUrl,
     files,

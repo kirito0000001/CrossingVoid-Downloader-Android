@@ -295,6 +295,14 @@ public class AndroidLauncherPlugin extends Plugin {
             if (!GameDownloadService.isRunning() && status.equals("cancelling")) {
                 GameDownloadService.clearAllDownloads(getContext());
                 state = JSObject.fromJSONObject(GameDownloadService.readStateObject(getContext()));
+            } else if (!GameDownloadService.isRunning() && status.equals("error")) {
+                // 服务没在跑、状态却停在 error —— 这是一次**已经结束**的失败，
+                // 而且多半是**上一版**留下的（2026-09-22 用户升到 1.4.4 后仍然每次启动都读到
+                // 旧版写下的 `No value for source`，界面被钉在 error，主按钮变成"重新检测"，
+                // 他反而点不到"下载游戏"）。
+                // 归位成 idle 让他能重新开始；失败原因本来就写进日志了，不需要永远挂在界面上。
+                DownloadStateStore.writeStateAndBroadcast(getContext(), DownloadStateStore.idleState());
+                state = JSObject.fromJSONObject(GameDownloadService.readStateObject(getContext()));
             } else if (!GameDownloadService.isRunning() && (
                 status.equals("downloading") ||
                 status.equals("pausing") ||

@@ -71,7 +71,11 @@ final class GamePackagePlan {
     }
 
     private GamePackagePlan(JSONObject source) throws JSONException {
-        this.source = source.getString("source");
+        // `source` 只是写进状态给界面看的（"下载源：github"），不参与任何下载逻辑 ——
+        // 所以缺了它不该让整单解析失败。前端的 AndroidGameDownloadPlan 里以前就没有这个字段，
+        // `getString` 在 key 不存在时直接抛 `No value for source`，
+        // 于是安卓端一点"下载游戏"就报错弹"重新检测"（2026-09-22 用户报的现场）。
+        this.source = source.optString("source", "");
         productKey = source.getString("productKey");
         runtime = source.getString("runtime");
         version = source.getString("version");

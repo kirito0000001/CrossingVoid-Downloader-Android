@@ -59,6 +59,10 @@ public class LauncherUpdateService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        // ⚠️ 必须先挂上 notifier 再用它 —— 之前少了这一句，createChannel() 直接 NPE，
+        // onCreate 抛异常 = 前台服务创建失败 = 进程闪退（用户 2026-09-22 报的"点更新启动器就崩"）。
+        // 写法对齐 GameDownloadService.onCreate 里的 `notifier = DownloadNotifier.attach(this)`。
+        notifier = LauncherUpdateNotifier.attach(this);
         notifier.createChannel();
         downloader = new LauncherUpdateDownloader(new LauncherUpdateDownloader.Host() {
             @Override

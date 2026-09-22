@@ -236,9 +236,16 @@ public class GameDownloadService extends Service {
             // 所以组装 OBB 那段不用另写一份。
             // 老的分片清单（chunks[]）留着兼容，但线上已经不发那种包了。
             boolean packagePlan = GameDownloadService.looksLikePackagePlan(importPlan);
-            executor.execute(() -> packagePlan
-                ? runPackageImport(importPlan, Uri.parse(importTreeUri), startId)
-                : runImport(importPlan, Uri.parse(importTreeUri), startId));
+            executor.execute(() -> {
+                // ⚠️ 这里必须写成 if/else 语句：三元表达式不是 statement expression，
+                // 而两个分支返回的都是 void —— 写成 `? a() : b()` 编译不过（javac:
+                // "条件表达式的目标类型不能为空"）。
+                if (packagePlan) {
+                    runPackageImport(importPlan, Uri.parse(importTreeUri), startId);
+                } else {
+                    runImport(importPlan, Uri.parse(importTreeUri), startId);
+                }
+            });
             return START_NOT_STICKY;
         }
 
@@ -248,6 +255,16 @@ public class GameDownloadService extends Service {
         }
         if (planJson == null || planJson.isBlank()) {
             saveAndBroadcastState(errorState("没有可恢复的下载任务。"));
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        // 恢复的任务可能是一份**解析不了**的旧计划（前端换了清单格式、字段对不上，
+        // 比如 2026-09-22 那次 `No value for source`）。留着它只会让每次启动都报同一个错，
+        // 而且界面会一直被那个 error 状态卡住、点"重新检测"也回不来 ——
+        // 所以先验一遍，过不了就丢掉，让玩家能干干净净地重新开始下载。
+        if (!isRecoverablePlan(planJson)) {
+            LauncherStorage.prefs(this).edit().remove(LauncherStorage.PREF_PLAN).apply();
+            saveAndBroadcastState(errorState("上一次的下载任务已失效，请重新下载。"));
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -810,6 +827,20 @@ public class GameDownloadService extends Service {
         try {
             return new JSONObject(planJson).has("files");
         } catch (JSONException error) {
+            return false;
+        }
+    }
+
+    /** 这份计划还解析得了吗（格式对得上当前的原生实现）。恢复任务之前先问一句。 */
+    private static boolean isRecoverablePlan(String planJson) {
+        try {
+            if (looksLikePackagePlan(planJson)) {
+                GamePackagePlan.parse(planJson);
+            } else {
+                DownloadPlan.parse(planJson);
+            }
+            return true;
+        } catch (Exception error) {
             return false;
         }
     }

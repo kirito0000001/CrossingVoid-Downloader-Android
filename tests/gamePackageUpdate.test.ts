@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -186,5 +188,75 @@ describe("android download plan", () => {
     const kinds = new Map(plan.files.map((entry) => [entry.path, entry.kind]));
     expect(kinds.get(VERSION_MARKER)).toBe("metadata");
     expect(kinds.get(ANDROID_OBB_SIDECAR_PATH)).toBe("obb-sidecar");
+  });
+
+  it("always carries the download source the native side reads by name", () => {
+    // 原生 GamePackagePlan 是**照字段名读**的：少一个字段整单解析就会抛异常。
+    // 2026-09-22 安卓端"能检测到版本、一点下载就弹重新检测"就是这个 ——
+    // 原生报了 `No value for source`，而当时 plan 里根本没有这个字段。
+    // 它只是用来在界面上显示"下载源：github"，不参与下载逻辑，但**必须一直带着**。
+    expect(buildAndroidGameDownloadPlan(packageFixture(), null).source).toBe("official");
+    expect(
+      buildAndroidGameDownloadPlan(packageFixture(), null, { source: "github" }).source,
+    ).toBe("github");
+  });
+
+  it("keeps the native plan parser tolerant about the display-only source", () => {
+    const planSource = readFileSync(
+      resolve(
+        process.cwd(),
+        "android/app/src/main/java/com/lingjing/launcher/android/GamePackagePlan.java",
+      ),
+      "utf8",
+    );
+    const serviceSource = readFileSync(
+      resolve(
+        process.cwd(),
+        "android/app/src/main/java/com/lingjing/launcher/android/GameDownloadService.java",
+      ),
+      "utf8",
+    );
+
+    // 双保险：即使前端将来又漏了这个字段，原生也该用 optString 兜住，
+    // 而不是让整单下载因为一个"只用来显示的字段"炸掉。
+    expect(planSource).toContain('source.optString("source", "")');
+    expect(planSource).not.toContain('source.getString("source")');
+
+    // 还有一层：恢复任务前先验一遍计划，解析不了的旧计划要丢掉 ——
+    // 否则那个 error 状态会把界面钉死在"重新检测"上（2026-09-22 的现场）。
+    expect(serviceSource).toContain("if (!isRecoverablePlan(planJson))");
+    expect(serviceSource).toContain("private static boolean isRecoverablePlan(String planJson)");
+    expect(serviceSource).toContain("remove(LauncherStorage.PREF_PLAN)");
+  });
+
+  it("recovers the UI from a stale error state left behind by an older build", () => {
+    const pluginSource = readFileSync(
+      resolve(
+        process.cwd(),
+        "android/app/src/main/java/com/lingjing/launcher/android/AndroidLauncherPlugin.java",
+      ),
+      "utf8",
+    );
+
+    // 服务没在跑、状态却停在 error —— 那是一次**已经结束**的失败（而且多半是上一版留下的）。
+    // 必须归位成 idle：否则界面每次启动都读到这个错，主按钮变成"重新检测"，
+    // 玩家反而点不到"下载游戏"（2026-09-22 用户升到 1.4.4 后还卡在这个老错误上）。
+    expect(pluginSource).toContain('!GameDownloadService.isRunning() && status.equals("error")');
+    expect(pluginSource).toContain(
+      "DownloadStateStore.writeStateAndBroadcast(getContext(), DownloadStateStore.idleState())",
+    );
+  });
+
+  it("keeps the primary action steady while a download verifies each file", () => {
+    const appSource = readFileSync(resolve(process.cwd(), "src/App.vue"), "utf8");
+
+    // 下载途中原生会为**每一个文件**推一次 `verifying`（下完立刻算 sha256），
+    // 紧接着又推 `downloading`。那属于下载本身、不是独立阶段 ——
+    // 照单全收地重算 phase 会让主按钮每文件在"暂停下载 / 校验中"之间抖一次
+    // （2026-09-22 用户报的现场）。所以已经在 downloading 时要稳住。
+    expect(appSource).toContain(
+      'const downloadingAlready = phase.value === "downloading" && state.status === "verifying"',
+    );
+    expect(appSource).toContain("if (!downloadingAlready) {");
   });
 });

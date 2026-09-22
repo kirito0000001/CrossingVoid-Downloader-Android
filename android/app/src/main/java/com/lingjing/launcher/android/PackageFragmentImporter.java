@@ -193,7 +193,10 @@ final class PackageFragmentImporter {
                 }
             }
         } catch (IOException error) {
-            throw new IOException("碎片压缩包读不了：" + archive.getName() + "：" + error.getMessage(), error);
+            // 这个 catch 兜的是"处理这个包"过程中的 IO 问题 —— 除了打不开/读断，
+            // 也可能是里面写目标文件失败。所以消息别把话说死成"读不了"，
+            // 带上原始原因更接近现场。
+            throw new IOException("处理碎片压缩包失败：" + archive.getName() + "：" + error.getMessage(), error);
         }
     }
 
@@ -256,7 +259,7 @@ final class PackageFragmentImporter {
     }
 
     /** 目标位置已经是正确的那一份（size + sha256 都对得上）。 */
-    private static boolean isAlreadyThere(File target, GamePackagePlan.FileEntry entry) {
+    private static boolean isAlreadyThere(File target, GamePackagePlan.FileEntry entry) throws IOException {
         return target.isFile()
             && target.length() == entry.sizeBytes
             && DownloadFileUtils.hashMatches(target, entry.sha256);

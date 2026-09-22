@@ -642,7 +642,14 @@ function applyNativeState(state: NativeDownloadState) {
   if (!preserveLauncherUpdatePhase) {
     progress.value = Math.max(0, Math.min(100, state.percent || 0));
     statusMessage.value = state.message || "正在处理游戏下载";
-    phase.value = launcherPhaseFromNativeState(state.status);
+    // ⚠️ 下载途中原生会为**每一个文件**推一次 `verifying`（下完就立刻算 sha256），
+    // 紧接着又推 `downloading`（开始下一个）。如果照单全收地重算 phase，
+    // 主按钮就会在"暂停下载"和"校验中"之间每文件抖一次（2026-09-22 用户报的现场）。
+    // 那个校验是**下载的一部分**、不是独立阶段，所以已经在 downloading 时就稳住不动。
+    const downloadingAlready = phase.value === "downloading" && state.status === "verifying";
+    if (!downloadingAlready) {
+      phase.value = launcherPhaseFromNativeState(state.status);
+    }
   }
   const logSignature = [state.status, state.currentChunk, state.verifiedChunks, state.message].join("|");
   if (logSignature !== lastNativeLogSignature) {
