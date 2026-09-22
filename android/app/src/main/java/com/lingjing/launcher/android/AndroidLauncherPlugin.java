@@ -565,6 +565,17 @@ public class AndroidLauncherPlugin extends Plugin {
         call.resolve(result);
     }
 
+    /**
+     * 装游戏 APK —— 这一步会**覆盖启动器自己**：两者同包名（`com.TFAC.CorssingVoid`，
+     * 见 `android/app/build.gradle` 的 applicationId）。这是设计：启动器是一次性"下载器"，
+     * 资源准备好后就被游戏顶掉。所以 `validateReplacement` 那道校验别删 —— 它确认
+     * "这个 APK 确实能替换掉我"（包名/签名/versionCode）。
+     *
+     * ⚠️ 配套的另一半在准备阶段（`GameDownloadService.preparePackageArtifacts`）：
+     * **OBB 和 APK 必须【成对】就绪**。只往手机里放 OBB、不装游戏 APK，跑起来的还是启动器，
+     * 它读 UE 的 OBB 必然崩 —— 手动验证时别只看一半。
+     * （2026-09-22 用户手动推 OBB 时看到的那次"闪退"，就是这么来的，不是真 bug。）
+     */
     @PluginMethod
     public void installDownloadedApk(PluginCall call) {
         File apkFile = LauncherInstallSupport.downloadedApkFile(getContext());

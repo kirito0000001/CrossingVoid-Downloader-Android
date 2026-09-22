@@ -9,7 +9,10 @@ import java.io.InputStream;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 import java.util.zip.ZipEntry;
@@ -77,6 +80,12 @@ final class ObbAssembler {
 
             try (ZipOutputStream output = new ZipOutputStream(new FileOutputStream(temporary))) {
                 output.setLevel(Deflater.NO_COMPRESSION);
+                // ⚠️ 这一行不能省。UE 在 Java 层靠 **EOCD 末尾的全局注释** 判断"这是不是一个有效的 OBB"，
+                // 格式是 `%10d` 的 versionCode —— UE 自己产出的 OBB 尾部长这样：
+                //   ... PK\x05\x06 0000 0000 3e00 3e00 <目录偏移> 0a00 "         1"
+                // 缺了它 UE 直接弹 "No OBB found and no store key"，**根本不看里面内容对不对**。
+                // 2026-09-22 用户实测：缺注释的组装产物报这个错；把带注释的原始 OBB 放上去就被认到了。
+                output.setComment(String.format(Locale.ROOT, "%10d", obbVersionFromName(outputFile)));
                 for (int index = 0; index < entries.size(); index++) {
                     host.checkControlSignals();
                     String entryPath = entries.get(index);
@@ -107,6 +116,20 @@ final class ObbAssembler {
             throw new IOException("无法写入新的 OBB：" + outputFile.getAbsolutePath());
         }
         return outputFile;
+    }
+
+    /**
+     * OBB 名固定是 `main.<versionCode>.<package>.obb` —— 中间那个数字就是
+     * UE 写在 ZIP 全局注释里的值（`%10d` 右对齐）。解析不出来就退回 1。
+     */
+    private static int obbVersionFromName(File outputFile) {
+        Matcher matcher = Pattern.compile("^(?:main|patch)\\.(\\d+)\\.").matcher(outputFile.getName());
+        if (!matcher.find()) return 1;
+        try {
+            return Integer.parseInt(matcher.group(1));
+        } catch (NumberFormatException error) {
+            return 1;
+        }
     }
 
     /** 已有 OBB 里的条目名 → 未压缩大小，用来判断能不能只搬旧文件。 */

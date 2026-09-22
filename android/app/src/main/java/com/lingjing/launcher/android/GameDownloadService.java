@@ -1038,6 +1038,24 @@ public class GameDownloadService extends Service {
     /**
      * APK 在下载时已经直接落到 prepared，OBB 在这里按旁车顺序组装：
      * 这次下过的条目用下载件，没下的从已安装的 OBB 里搬（见 ObbAssembler 注释）。
+     *
+     * ⚠️⚠️ 这一段是"装不上"的高发区，动之前先看这三条（2026-09-22 排查了整整一轮）：
+     *
+     * 1. **组装出来的 OBB 必须带 EOCD 全局注释**（`%10d` 的 versionCode，形如 `"         1"`）。
+     *    UE 在 Java 层靠这段注释判断"这是不是一个有效 OBB"，**缺了就弹
+     *    "No OBB found and no store key"，根本不看里面内容是否完整**。
+     *    → 写在 `ObbAssembler.assemble()` 的 `output.setComment(...)`。
+     *    → 判据：UE 原始 OBB `2141746524` 字节，缺注释的组装产物 `2141746514` —— 差的就是这 10 字节。
+     *
+     * 2. **OBB 不是随便重组都能用**。条目集/结构对不上，UE 可能认不出来。
+     *    排查最快的办法：拿 UE 打包的原始 OBB
+     *    （`Saved/StagedBuilds/Android.obb`，或 `F:\DaBaoV\...\main.<versionCode>.<包名>.obb`）
+     *    和组装产物**比大小、解 EOCD 的末尾 22 字节** —— 比读引擎源码猜快得多。
+     *
+     * 3. **启动器和游戏是同包名**（`com.TFAC.CorssingVoid`，见 app/build.gradle 的 applicationId）。
+     *    装游戏 APK 会覆盖启动器，这是设计。但反过来：**只往手机里放 OBB、不装游戏 APK，
+     *    跑起来的其实还是启动器**，它读 UE 的 OBB 必然崩 ——
+     *    手动验证时**两步都得做**，不然看到的崩溃是假的。
      */
     private PreparedFiles preparePackageArtifacts(File entriesDir, File apkTarget, File obbTarget) throws Exception {
         if (!apkTarget.isFile() || apkTarget.length() <= 0) {
