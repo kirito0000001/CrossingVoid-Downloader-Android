@@ -146,8 +146,11 @@ final class GamePackagePlan {
             if (obbEntries.isEmpty()) throw new JSONException("OBB 旁车没有条目");
         }
 
+        // `source` 只有"给了值却不认识"才算错：空串是合法状态（见构造开头那段说明）。
+        // 上一版把空串一并拒掉，等于 :78 那处 `optString` 白改 —— 错误文案从
+        // `No value for source` 变成 `下载清单不完整`，玩家看到的还是"重新检测"。
         if (!productKey.equals(PRODUCT_KEY) || !runtime.equals(RUNTIME)
-            || (!this.source.equals("official") && !this.source.equals("github"))
+            || (!this.source.isEmpty() && !this.source.equals("official") && !this.source.equals("github"))
             || files.isEmpty() || totalBytes < 0) {
             throw new JSONException("下载清单不完整");
         }

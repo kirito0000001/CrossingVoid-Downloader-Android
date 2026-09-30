@@ -148,6 +148,21 @@ public class GamePackagePlanTest {
     }
 
     @Test
+    public void toleratesAMissingSourceButStillRejectsAnExplicitUnknownOne() throws Exception {
+        // 2026-09-22 现场：前端老版本不带 `source` 字段，`getString` 抛
+        // `No value for source`，安卓端一点「下载游戏」就报错弹「重新检测」。
+        // source 只写进状态给界面看、不参与下载逻辑，缺了不该让整单解析失败。
+        JSONObject missing = plan();
+        missing.remove("source");
+        assertEquals("", GamePackagePlan.parse(missing.toString()).source);
+
+        // 但显式给了个不认识的值是实打实的清单错误，照旧拒。
+        JSONObject bogus = plan();
+        bogus.put("source", "mirror");
+        assertThrows(JSONException.class, () -> GamePackagePlan.parse(bogus.toString()));
+    }
+
+    @Test
     public void matchesOnlyTheSameVersionAndProduct() throws Exception {
         GamePackagePlan parsed = GamePackagePlan.parse(plan().toString());
         JSONObject state = new JSONObject().put("version", "0.5.14").put("productKey", GamePackagePlan.PRODUCT_KEY);

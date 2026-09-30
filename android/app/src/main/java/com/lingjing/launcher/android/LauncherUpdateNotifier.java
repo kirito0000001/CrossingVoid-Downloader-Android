@@ -55,18 +55,19 @@ final class LauncherUpdateNotifier {
 
     void startForeground(int percent) {
         Notification notification = build(percent);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            service.startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-        } else {
-            service.startForeground(NOTIFICATION_ID, notification);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                service.startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            } else {
+                service.startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (RuntimeException ignored) {
+            // 同 DownloadNotifier 的保底处理：前台通知挂不上，也别掀掉整个更新服务。
         }
     }
 
     void update(int percent) {
-        try {
-            NotificationManagerCompat.from(service).notify(NOTIFICATION_ID, build(percent));
-        } catch (SecurityException ignored) {
-        }
+        notify(build(percent));
     }
 
     void showCompletion(String versionName) {
@@ -76,7 +77,7 @@ final class LauncherUpdateNotifier {
             .setContentText("版本 " + versionName + " 可以安装")
             .setAutoCancel(true)
             .build();
-        NotificationManagerCompat.from(service).notify(NOTIFICATION_ID, notification);
+        notify(notification);
     }
 
     void showError(String message) {
@@ -87,10 +88,18 @@ final class LauncherUpdateNotifier {
             .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
             .setAutoCancel(true)
             .build();
-        NotificationManagerCompat.from(service).notify(NOTIFICATION_ID, notification);
+        notify(notification);
     }
 
     void cancelActive() {
         NotificationManagerCompat.from(service).cancel(NOTIFICATION_ID);
+    }
+
+    private void notify(Notification notification) {
+        try {
+            NotificationManagerCompat.from(service).notify(NOTIFICATION_ID, notification);
+        } catch (SecurityException ignored) {
+            // 没有 POST_NOTIFICATIONS 时 notify 会抛 SecurityException，提示画不出来不影响更新结果。
+        }
     }
 }

@@ -41,10 +41,17 @@ final class DownloadNotifier {
 
     void startForeground(int percent) {
         Notification notification = buildProgressNotification(percent);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            service.startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-        } else {
-            service.startForeground(NOTIFICATION_ID, notification);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                service.startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            } else {
+                service.startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (RuntimeException ignored) {
+            // 保底：startForeground 抛出去会顺着 onStartCommand 掀掉整个服务进程，进度一起丢。
+            // 常规情况走不到这里 —— Android 13+ 用户拒掉通知权限时 startForeground 照样成功，
+            // 只是通知栏不显示（那是 notify 那条路径的事）。真到这儿多半是渠道/机型的边缘情况，
+            // 宁可不挂前台通知也要把这一步跑完。
         }
     }
 
@@ -103,6 +110,11 @@ final class DownloadNotifier {
     }
 
     private void notify(Notification notification) {
-        NotificationManagerCompat.from(service).notify(NOTIFICATION_ID, notification);
+        try {
+            NotificationManagerCompat.from(service).notify(NOTIFICATION_ID, notification);
+        } catch (SecurityException ignored) {
+            // 没有 POST_NOTIFICATIONS 时 notify 会抛 SecurityException。
+            // 这条路径只负责"暂停/完成/失败"的提示，提示画不出来不影响下载结果。
+        }
     }
 }

@@ -156,6 +156,19 @@ describe("native Android game download integration", () => {
     expect(apkValidatorSource).toContain("目标游戏 APK versionCode 低于当前安装器");
   });
 
+  it("never gates a download on the notification permission", () => {
+    // 2026-09-27 现场：通知权限被拒时 startDownload 直接 reject
+    // 「需要通知权限才能在后台显示游戏下载进度。」—— 一条纯提示性的权限把下载整个挡住。
+    // 权限在 MainActivity.onCreate 已经问过一次，这里只负责闭嘴照跑。
+    expect(pluginSource).not.toContain("requestPermissionForAlias");
+    expect(pluginSource).not.toContain("NotificationPermissionResult");
+    expect(pluginSource).not.toContain('call.reject("需要通知权限');
+
+    // 提醒画不出来也不该掀掉服务：notify/startForeground 一律吞掉异常。
+    expect(nativeSource).toContain("catch (SecurityException ignored)");
+    expect(nativeSource).toContain("catch (RuntimeException ignored)");
+  });
+
   it("records native status errors and refresh failures", () => {
     expect(appSource).toContain('reportFailure("native-download-state", new Error(state.message || "原生下载服务失败"))');
     expect(appSource).toContain('reportFailure("refresh-game-status", error)');

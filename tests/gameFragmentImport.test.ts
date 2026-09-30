@@ -22,6 +22,26 @@ describe("game fragment import", () => {
     expect(importSource).toContain("还没拿到游戏清单");
   });
 
+  it("treats backing out of the folder picker as a cancel, not a failure", () => {
+    const importSource = appSource.slice(
+      appSource.indexOf("async function importGameChunksFromDevice"),
+      appSource.indexOf("async function exportGameChunksFromDevice"),
+    );
+
+    // 2026-09-27 现场：在选择器里按返回，原生 reject「未选择游戏碎片。」，
+    // 前端 catch 把相位钉成 error —— 看着像下载坏了，其实玩家只是取消了。
+    expect(importSource).toContain("const result = await importGameChunks(plan)");
+    expect(importSource).toContain("if (!result.started)");
+    expect(importSource).toContain("phase.value = previousPhase");
+    expect(importSource).toContain("用户取消了碎片文件夹选择");
+
+    // 原生那边同样把"取消"当取消：resolve 成 started=false，不再 reject。
+    expect(nativeSource).toContain("private static void resolvePickerCancelled(PluginCall call)");
+    expect(nativeSource.match(/resolvePickerCancelled\(call\)/g)).toHaveLength(3);
+    expect(nativeSource).not.toContain('call.reject("未选择游戏碎片。")');
+    expect(nativeSource).not.toContain('call.reject("未选择导出文件夹。")');
+  });
+
   it("bridges the newer file-level plan as well as the legacy chunk plan", () => {
     expect(bridgeSource).toContain(
       "importGameChunks(options: { plan: AndroidGameDownloadPlan | AndroidDownloadPlan }): Promise<{ started: boolean }>;",

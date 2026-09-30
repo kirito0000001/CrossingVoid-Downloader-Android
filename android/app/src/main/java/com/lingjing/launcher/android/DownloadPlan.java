@@ -28,7 +28,12 @@ final class DownloadPlan {
     private DownloadPlan(JSONObject source) throws JSONException {
         productKey = source.getString("productKey");
         runtime = source.getString("runtime");
-        this.source = source.getString("source");
+        // 缺 `source` 时按 official 走，而不是抛 `No value for source` 把整单拒掉：
+        // 这条链路（老的分片清单）里 source 只决定"用不用官网签名 URL"，
+        // 缺省走官网分支是安全的，而抛异常会让玩家一点下载就弹"重新检测"
+        // （2026-09-21/22 设备 769993cb 报的现场）。和前端 `normalizeAndroidDownloadSource`
+        // 的归一化规则一致：只有明确写着 github 才是 github。
+        this.source = source.optString("source", "official");
         version = source.getString("version");
         archiveFileName = source.getString("archiveFileName");
         archiveSha256 = source.getString("archiveSha256").toLowerCase(Locale.ROOT);

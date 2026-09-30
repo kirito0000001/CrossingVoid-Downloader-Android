@@ -922,6 +922,14 @@ async function handleLauncherUpdateCheck() {
   };
   const hasUpdate = await checkLauncherUpdate();
   if (hasUpdate) return;
+  // `error` 只是给玩家看的一次提示，不是一个能"退回去"的稳定相位。
+  // 上一版原样还原它，于是「检查更新」一按就是 launcherChecking -> error 弹回去，
+  // 界面卡死在 error 里点什么都出不来 —— 只能靠主按钮的「重新检测」逃出去
+  // （2026-09-27 设备 54e5d060 连点三次「检查更新」的现场）。
+  if (previous.phase === "error") {
+    await refreshGameStatus();
+    return;
+  }
   phase.value = previous.phase;
   statusMessage.value = previous.statusMessage;
   progress.value = previous.progress;
@@ -1102,9 +1110,19 @@ async function importGameChunksFromDevice() {
       officialEnabled: officialChannelEnabled.value,
       githubEnabled: githubChannelEnabled.value,
     });
+    const previousPhase = phase.value;
+    const previousMessage = statusMessage.value;
     phase.value = "verifying";
     statusMessage.value = "请选择放着碎片的文件夹";
-    await importGameChunks(plan);
+    const result = await importGameChunks(plan);
+    // 在选择器里按返回不是失败：原生 resolve 成 `started: false`，
+    // 这里原样退回选文件夹之前的相位 —— 以前抛异常会把界面钉在 error 上
+    // （2026-09-27 设备 54e5d060 的现场）。
+    if (!result.started) {
+      phase.value = previousPhase;
+      statusMessage.value = previousMessage;
+      void writeLauncherLog("info", "import-game-chunks", "用户取消了碎片文件夹选择");
+    }
   } catch (error) {
     phase.value = "error";
     statusMessage.value = error instanceof Error ? error.message : "无法导入游戏碎片";
@@ -1115,9 +1133,17 @@ async function importGameChunksFromDevice() {
 async function exportGameChunksFromDevice() {
   if (!canExportGameChunks.value) return;
   try {
+    const previousPhase = phase.value;
+    const previousMessage = statusMessage.value;
     phase.value = "exporting";
     statusMessage.value = "请选择用于保存恢复文件的文件夹";
-    await exportGameChunks();
+    const result = await exportGameChunks();
+    // 同导入：取消选择不是错误，安静退回原相位。
+    if (!result.started) {
+      phase.value = previousPhase;
+      statusMessage.value = previousMessage;
+      void writeLauncherLog("info", "export-game-chunks", "用户取消了导出文件夹选择");
+    }
   } catch (error) {
     phase.value = "error";
     statusMessage.value = error instanceof Error ? error.message : "无法导出已下载碎片";

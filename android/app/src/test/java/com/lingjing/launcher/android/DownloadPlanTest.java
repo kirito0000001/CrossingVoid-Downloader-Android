@@ -120,6 +120,16 @@ public class DownloadPlanTest {
         parse(manifest);
     }
 
+    @Test
+    public void defaultsMissingSourceToOfficial() throws Exception {
+        JSONObject manifest = manifest();
+        // 2026-09-22 现场：清单里没有 `source` 时 getString 直接抛
+        // `No value for source`，玩家点一次下载就弹一次「重新检测」。
+        manifest.remove("source");
+
+        assertEquals("official", parse(manifest).source);
+    }
+
     @Test(expected = JSONException.class)
     public void rejectsUnknownSource() throws Exception {
         JSONObject manifest = manifest();

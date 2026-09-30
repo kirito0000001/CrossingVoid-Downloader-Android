@@ -119,6 +119,20 @@ describe("Android launcher hot update integration", () => {
     expect(nativeStateHandler).toContain("if (!preserveLauncherUpdatePhase)");
   });
 
+  it("never restores an error phase after an inconclusive launcher check", () => {
+    const checkSource = appSource.slice(
+      appSource.indexOf("async function handleLauncherUpdateCheck"),
+      appSource.indexOf("async function handlePrimaryAction"),
+    );
+
+    // 2026-09-27 现场：checkLauncherUpdate 返回 false 时把快照原样还原，
+    // 而快照里的 phase 就是 `error` —— 于是「检查更新」一按就 launcherChecking -> error，
+    // 界面卡死在 error 里点什么都出不来，只有主按钮的「重新检测」能逃出去。
+    expect(checkSource).toContain('if (previous.phase === "error")');
+    expect(checkSource).toContain("await refreshGameStatus();");
+    expect(checkSource).toContain("phase.value = previous.phase;");
+  });
+
   it("keeps launcher update detection and actions visible in the UI", () => {
     expect(appSource).toContain("launcherUpdateStatusText");
     expect(appSource).toContain("handleLauncherUpdateCheck");

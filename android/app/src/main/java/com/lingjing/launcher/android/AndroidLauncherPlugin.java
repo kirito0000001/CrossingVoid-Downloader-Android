@@ -24,14 +24,12 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 
 import com.getcapacitor.JSObject;
-import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
-import com.getcapacitor.annotation.PermissionCallback;
 
 import java.io.File;
 import java.net.HttpURLConnection;
@@ -323,19 +321,10 @@ public class AndroidLauncherPlugin extends Plugin {
 
     @PluginMethod
     public void startDownload(PluginCall call) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && getPermissionState("notifications") != PermissionState.GRANTED) {
-            requestPermissionForAlias("notifications", call, "downloadNotificationPermissionResult");
-            return;
-        }
-        startDownloadService(call);
-    }
-
-    @PermissionCallback
-    private void downloadNotificationPermissionResult(PluginCall call) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && getPermissionState("notifications") != PermissionState.GRANTED) {
-            call.reject("需要通知权限才能在后台显示游戏下载进度。");
-            return;
-        }
+        // 通知权限只决定"进度条能不能出现在通知栏"，不该挡住下载本身。
+        // 上一版没授权就 reject「需要通知权限才能在后台显示游戏下载进度。」，
+        // 于是关掉通知的机器根本下不了游戏（2026-09-27 设备 54e5d060 的现场）。
+        // 权限在 MainActivity.onCreate 里已经问过一次，用户拒绝就闭嘴照跑。
         startDownloadService(call);
     }
 
@@ -362,6 +351,21 @@ public class AndroidLauncherPlugin extends Plugin {
         call.resolve(result);
     }
 
+    /**
+     * 用户在选择器里按了返回 —— 这不是错误，只是"这次不导（不出了）"。
+     *
+     * 以前这里是 reject("未选择游戏碎片。")，前端 catch 把相位打成 `error`，
+     * 主按钮变成「重新检测」；更糟的是「检查更新」按钮会把上一次的 error 相位原样还原，
+     * 于是界面卡死在 error 里点什么都出不来（2026-09-27 设备 54e5d060 的现场）。
+     * 改成 `resolve(started=false)`：前端看到 started=false 就安静地退回选文件夹之前的相位。
+     */
+    private static void resolvePickerCancelled(PluginCall call) {
+        JSObject response = new JSObject();
+        response.put("started", false);
+        response.put("cancelled", true);
+        call.resolve(response);
+    }
+
     @PluginMethod
     public void importGameChunks(PluginCall call) {
         if (call.getObject("plan") == null) {
@@ -377,12 +381,12 @@ public class AndroidLauncherPlugin extends Plugin {
     private void importGameChunksResult(PluginCall call, ActivityResult result) {
         Intent data = result.getData();
         if (result.getResultCode() != Activity.RESULT_OK || data == null) {
-            call.reject("未选择游戏碎片。");
+            resolvePickerCancelled(call);
             return;
         }
         Uri treeUri = data.getData();
         if (treeUri == null) {
-            call.reject("未选择游戏碎片。");
+            resolvePickerCancelled(call);
             return;
         }
         try {
@@ -418,7 +422,7 @@ public class AndroidLauncherPlugin extends Plugin {
     private void exportGameChunksResult(PluginCall call, ActivityResult result) {
         Intent data = result.getData();
         if (result.getResultCode() != Activity.RESULT_OK || data == null || data.getData() == null) {
-            call.reject("未选择导出文件夹。");
+            resolvePickerCancelled(call);
             return;
         }
         Uri treeUri = data.getData();
@@ -460,19 +464,7 @@ public class AndroidLauncherPlugin extends Plugin {
 
     @PluginMethod
     public void startLauncherUpdate(PluginCall call) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && getPermissionState("notifications") != PermissionState.GRANTED) {
-            requestPermissionForAlias("notifications", call, "launcherUpdateNotificationPermissionResult");
-            return;
-        }
-        startLauncherUpdateService(call);
-    }
-
-    @PermissionCallback
-    private void launcherUpdateNotificationPermissionResult(PluginCall call) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && getPermissionState("notifications") != PermissionState.GRANTED) {
-            call.reject("需要通知权限才能显示启动器更新进度。");
-            return;
-        }
+        // 同上：通知权限不该拦住启动器更新，没授权就只是没有通知栏进度。
         startLauncherUpdateService(call);
     }
 
