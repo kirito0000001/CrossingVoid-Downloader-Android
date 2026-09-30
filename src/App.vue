@@ -137,7 +137,6 @@ const launcherUpdateCheckCompleted = ref(false);
 const launcherNetworkLocked = computed(() =>
   !canUseAndroidLauncherNetwork(
     launcherUpdateCheckCompleted.value,
-    launcherUpdateCheckError.value,
     phase.value,
   ),
 );
@@ -737,6 +736,17 @@ async function checkLauncherUpdate(): Promise<boolean> {
     launcherUpdateCheckError.value = `启动器更新检查失败：${error instanceof Error ? error.message : "未知错误"}`;
     phase.value = "error";
     statusMessage.value = launcherUpdateCheckError.value;
+    // 检查失败时恰恰最需要日志，所以必须在这里把上传闸门放开 ——
+    // 上面 :697 刚把它关掉，若不还原，LauncherLogStore.upload 会直接抛
+    // 「当前启动器版本尚未通过验证，不能上传日志。」，自动上报也会在
+    // runAutomaticUpload 里提前 return，错误日志永远到不了服务器。
+    // 再包一层 try：这个 catch 的契约是"返回 false，绝不外抛"，恢复失败也不能
+    // 反过来把 refreshAllStatus() 掀掉（那又是一次"点不动"）。
+    try {
+      await setLauncherNetworkAccess(true);
+    } catch (restoreError) {
+      console.warn("Unable to restore launcher network access", restoreError);
+    }
     return false;
   }
 }
@@ -747,24 +757,48 @@ async function refreshGameStatus() {
   progress.value = 0;
   statusMessage.value = "正在读取本机已安装游戏";
   try {
-    const [installedGame, latestUpdate, nativeDownload] = await Promise.all([
+    // 本机状态必须先单独取回来，绝不能和远端清单绑在同一个 Promise.all 里：
+    // 上一版写的是三个一起 await —— checkAndroidGame() 与 getGameDownloadState() 都是
+    // 纯本地的原生调用，而清单要走网络、拉不到就 throw，于是整个 Promise.all reject，
+    // 下面「原生非 idle 就用本地状态」的分支永远到不了 —— 玩家明明有已下完待安装、
+    // 或暂停中的任务，网络一断却只能看到「重新检测」（2026-09-30 证书过期现场）。
+    const [installedGame, nativeDownload] = await Promise.all([
       checkAndroidGame(),
-      fetchAndroidGamePackage({
-        officialEnabled: officialChannelEnabled.value,
-        githubEnabled: githubChannelEnabled.value,
-      }),
       getGameDownloadState(),
     ]);
     gameInfo.value = installedGame;
-    updateInfo.value = latestUpdate;
-    totalBytes.value = latestUpdate.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+
+    let latestUpdate: AndroidGamePackage | null = null;
+    try {
+      latestUpdate = await fetchAndroidGamePackage({
+        officialEnabled: officialChannelEnabled.value,
+        githubEnabled: githubChannelEnabled.value,
+      });
+    } catch (manifestError) {
+      // 本机确实没有任何下载任务时，清单取不回来是真的无从下手，按原来的错误路径走。
+      // 但只要本机有任务，就必须让本地状态顶上来 —— 那才是玩家眼里的"我的游戏"。
+      if (nativeDownload.status === "idle") throw manifestError;
+      console.warn("Game manifest unavailable; keeping the local download state", manifestError);
+      void writeLauncherLog("warning", "game-manifest", "无法读取游戏清单，改用本机下载状态", {
+        message: manifestError instanceof Error ? manifestError.message : String(manifestError),
+        nativeStatus: nativeDownload.status,
+      });
+    }
+    if (latestUpdate) {
+      updateInfo.value = latestUpdate;
+      totalBytes.value = latestUpdate.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+    }
+
     if (nativeDownload.status !== "idle") {
       applyNativeState(nativeDownload);
-      if (nativeDownload.version && nativeDownload.version !== latestUpdate.version) {
+      // 清单没取回来时不做版本对比：本地状态照旧显示，别拿"不知道"去覆盖它。
+      if (latestUpdate && nativeDownload.version && nativeDownload.version !== latestUpdate.version) {
         statusMessage.value = `下载任务版本 ${nativeDownload.version} 已过期，继续后将切换到 ${latestUpdate.version}`;
       }
       return;
     }
+    if (!latestUpdate) throw new Error("无法读取游戏清单，请检查网络后重试。");
+
     activeDownloadSource.value = null;
     nativeDownloadStatus.value = "idle";
     currentChunk.value = 0;
@@ -784,7 +818,11 @@ async function refreshGameStatus() {
 }
 
 async function refreshAllStatus() {
-  if (await checkLauncherUpdate() || launcherUpdateCheckError.value) return;
+  // 上一版是 `if (await checkLauncherUpdate() || launcherUpdateCheckError.value) return;`
+  // —— 启动器更新检查一失败就短路，refreshGameStatus() 永不执行，phase 钉死在
+  // "error"，主按钮一直显示「重新检测」，点一次失败一次（2026-09-30 死循环现场）。
+  // 只有确实有待装更新（返回 true）才该拦住游戏状态刷新。
+  if (await checkLauncherUpdate()) return;
   await refreshGameStatus();
 }
 

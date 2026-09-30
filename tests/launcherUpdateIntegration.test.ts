@@ -30,6 +30,14 @@ const pluginSource = readFileSync(
   "utf8",
 );
 
+/**
+ * 断言"这段代码里没有旧写法"时必须先剥掉注释：说明性注释常常会把旧代码原样抄一遍
+ * 作对照，直接 not.toContain 会被自己的注释绊倒。
+ */
+function stripComments(source: string) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
+
 describe("Android launcher hot update integration", () => {
   it("checks launcher updates before game updates", () => {
     expect(appSource).toContain("checkLauncherUpdate");
@@ -131,6 +139,59 @@ describe("Android launcher hot update integration", () => {
     expect(checkSource).toContain('if (previous.phase === "error")');
     expect(checkSource).toContain("await refreshGameStatus();");
     expect(checkSource).toContain("phase.value = previous.phase;");
+  });
+
+  it("never pins the launcher behind a failed update check", () => {
+    const checkSource = appSource.slice(
+      appSource.indexOf("async function checkLauncherUpdate"),
+      appSource.indexOf("async function refreshGameStatus"),
+    );
+    const refreshAllSource = appSource.slice(
+      appSource.indexOf("async function refreshAllStatus"),
+      appSource.indexOf("async function refreshTrafficQuota"),
+    );
+    const lockedSource = appSource.slice(
+      appSource.indexOf("const launcherNetworkLocked = computed"),
+      appSource.indexOf("const trafficQuota = ref<TrafficQuotaStatus | null>(null)"),
+    );
+
+    // 2026-09-30 现场：www.crossingvoid.top 的证书过期，启动器更新清单取不回来。
+    // 旧版 refreshAllStatus 写着 `|| launcherUpdateCheckError.value`，检查一失败就
+    // 直接 return，refreshGameStatus() 永不执行 -> phase 钉死在 "error" -> 主按钮
+    // 永远是「重新检测」，点一次失败一次，玩家只能杀进程。失败是"不知道"，不是
+    // "必须升级"，不该拦住游戏状态刷新。
+    expect(stripComments(refreshAllSource)).not.toContain("launcherUpdateCheckError");
+    expect(refreshAllSource).toContain("if (await checkLauncherUpdate()) return;");
+    expect(refreshAllSource).toContain("await refreshGameStatus();");
+    // 同一个现场的另一半：闸门本身不能再由"检查失败"驱动，否则主按钮即使回到
+    // 「下载游戏」也点不动，日志上传按钮也一直灰着。
+    expect(stripComments(lockedSource)).not.toContain("launcherUpdateCheckError.value");
+    // 还有原生那一半：checkLauncherUpdate 开头把上传闸门关掉，失败路径必须还原，
+    // 否则 LauncherLogStore.upload 直接抛「当前启动器版本尚未通过验证，不能上传日志。」
+    expect(checkSource).toContain("await setLauncherNetworkAccess(true);");
+  });
+
+  it("keeps the local download state when the game manifest cannot be fetched", () => {
+    const source = stripComments(
+      appSource.slice(
+        appSource.indexOf("async function refreshGameStatus"),
+        appSource.indexOf("async function refreshAllStatus"),
+      ),
+    );
+
+    // 2026-09-30 同一现场的另一半：本机状态和远端清单原本塞在同一个 Promise.all 里，
+    // 清单一失败整个 Promise.all reject，「原生非 idle 就用本地状态」的分支永远到不了 ——
+    // 设备上明明有已下完待安装、或暂停中的任务，玩家却只能看到「重新检测」。
+    expect(source).toContain("const [installedGame, nativeDownload] = await Promise.all([");
+    expect(source.indexOf("getGameDownloadState()")).toBeLessThan(source.indexOf("fetchAndroidGamePackage("));
+    // 只有本机确实没有任何下载任务时，清单取不回来才该中断
+    expect(source).toContain('if (nativeDownload.status === "idle") throw manifestError;');
+    expect(source).toContain('console.warn("Game manifest unavailable; keeping the local download state", manifestError);');
+    // 本地状态照旧应用；只有拿到清单时才做版本对比
+    expect(source).toContain("applyNativeState(nativeDownload);");
+    expect(source).toContain("if (latestUpdate && nativeDownload.version && nativeDownload.version !== latestUpdate.version)");
+    // 原来的失败上报路径保持不变
+    expect(source).toContain('reportFailure("refresh-game-status", error)');
   });
 
   it("keeps launcher update detection and actions visible in the UI", () => {
