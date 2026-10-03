@@ -26,10 +26,14 @@ final class ApkPackageValidator {
 
         PackageInfo installed = packageManager.getPackageInfo(context.getPackageName(), flags);
         if (packageVersionCode(candidate) < packageVersionCode(installed)) {
-            throw new IOException("目标游戏 APK versionCode 低于当前安装器");
+            throw new IOException("目标游戏 APK 的版本号低于手机上的零境启动器，无法覆盖安装。"
+                + "请先卸载已安装的零境启动器，再重新下载安装游戏。");
         }
         if (!sameSignatures(packageSignatures(installed), packageSignatures(candidate))) {
-            throw new IOException("目标游戏 APK 签名不一致");
+            // 启动器和游戏同包名，装游戏 APK 就是覆盖启动器自己，所以签名必须完全一致。
+            // 手机上的启动器多半是测试版或被第三方改过包，Android 不允许跨签名覆盖安装。
+            throw new IOException("目标游戏 APK 签名不一致：手机上的零境启动器与本次下载的游戏包不是同一个签名。"
+                + "Android 不允许跨签名覆盖安装，请先卸载已安装的零境启动器（游戏内数据会一并删除），再重新下载安装游戏。");
         }
         return candidate;
     }

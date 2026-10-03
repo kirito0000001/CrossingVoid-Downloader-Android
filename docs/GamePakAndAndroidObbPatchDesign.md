@@ -140,6 +140,31 @@ com.TFAC.CorssingVoid
 
 当前启动器安装游戏后会清理私有 `prepared` 目录。因此在没有实现 APK 保留策略前，补丁发布清单仍必须引用一份可下载的游戏 APK。
 
+### 4.1 导出的游戏 APK 必须核对签名（2026-10-03 现场记录）
+
+启动器与游戏同包名，所以「游戏 APK 覆盖启动器」这一步由 Android 强制校验签名。签名不一致没有任何绕过手段，用户卸载重装之后一样会再撞一次。
+
+2026-10-03 设备 `d65004ff` 的日志里 `install-game` 连报 **36 次**「目标游戏 APK 签名不一致」（北京 10:40:45–10:42:57），该用户完全装不上游戏。
+
+风险点不在校验，而在导出的签名回退链：`android/app/build.gradle` 在环境变量 `CROSSINGVOID_GAME_KEYSTORE` 缺失时会**静默回退到 `~/.android/debug.keystore`（别名 `androiddebugkey`）**，构建日志里不会报错。只要有一次导出漏配下面四个变量：
+
+```text
+CROSSINGVOID_GAME_KEYSTORE
+CROSSINGVOID_GAME_KEYSTORE_PASSWORD
+CROSSINGVOID_GAME_KEY_ALIAS
+CROSSINGVOID_GAME_KEY_PASSWORD
+```
+
+那一版 APK 的签名就和服务器上既有的游戏 APK 不是同一张，所有老用户都会永久卡在签名校验上。
+
+**导出后必须核对 APK 的实际签名**，期望值与游戏 APK、启动器 APK 三者完全一致（见 `AndroidLauncherDevelopmentGuide.md` §3.2）：
+
+```text
+56f1b0b317e38985808ddd9ee03f3785a8c0190bf32ff2791ba6a3f2c7ba2d92
+```
+
+核对手段用 `apksigner verify --print-certs <APK>`，或直接用启动器同级的签名校验逻辑比对。
+
 ## 5. 总体架构
 
 ```text

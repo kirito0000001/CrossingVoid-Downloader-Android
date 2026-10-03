@@ -153,7 +153,50 @@ describe("native Android game download integration", () => {
     expect(pluginSource).toContain("ApkPackageValidator.validateReplacement");
     expect(apkValidatorSource).toContain("目标游戏 APK 包名不正确");
     expect(apkValidatorSource).toContain("目标游戏 APK 签名不一致");
-    expect(apkValidatorSource).toContain("目标游戏 APK versionCode 低于当前安装器");
+    expect(apkValidatorSource).toContain("目标游戏 APK 的版本号低于手机上的零境启动器");
+    // 光说"签名不一致"玩家没法行动：启动器和游戏同包名，唯一的出路是先卸载再重装。
+    expect(apkValidatorSource).toContain("请先卸载已安装的零境启动器");
+  });
+
+  it("keeps a half-downloaded file so the next run resumes instead of restarting", () => {
+    // 2026-10-03 设备 769993cb 现场：pakchunk0-Android.ucas（652 MB）下到 1.296 GB 时
+    // 连接中断，用户点「重新检测 → 下载游戏」后进度回落到 876 MB 重新开始 ——
+    // 因为这里在重试循环之前把整份半成品删了，PackageFileDownloader 的 Range 续传永远用不上。
+    const loopSource = downloadServiceSource.slice(
+      downloadServiceSource.indexOf("private void downloadPackageFiles"),
+      downloadServiceSource.indexOf("private PreparedFiles preparePackageArtifacts"),
+    );
+
+    // 删文件只允许发生在「长度已经够了却没通过校验」这一种情况，而且必须在续传判断之后。
+    const guardAt = loopSource.indexOf("target.length() >= entry.sizeBytes");
+    const deleteAt = loopSource.indexOf("DownloadFileUtils.deleteFile(target);");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(deleteAt).toBeGreaterThan(guardAt);
+
+    // 单次连接被掐断是常态，重试次数要多给几次，否则一次 run 撑不到文件传完。
+    expect(downloadServiceSource).toContain("private static final int PACKAGE_MAX_ATTEMPTS = 6;");
+    expect(loopSource).toContain("attempt <= PACKAGE_MAX_ATTEMPTS");
+    expect(loopSource).toContain('"连接中断，正在重试 " + (attempt + 1) + " / " + PACKAGE_MAX_ATTEMPTS');
+  });
+
+  it("ignores a second tap while a long native action is still running", () => {
+    // 2026-10-01 设备 e033416a 连报 4 次「上一项游戏下载任务正在结束，请稍后再试。」：
+    // 两个原生前台任务撞在一起，所以从 UI 侧先拦一道。
+    expect(appSource).toContain("async function runExclusiveAction(label: string, action: () => Promise<void>)");
+    expect(appSource).toContain("if (pendingAction.value) return;");
+    expect(appSource).toContain("Boolean(pendingAction.value)");
+    expect(appSource).toContain(`@click="runExclusiveAction('primary', handlePrimaryAction)"`);
+    expect(appSource).toContain(`@click="runExclusiveAction('import', importGameChunksFromDevice)"`);
+    expect(appSource).toContain(`@click="runExclusiveAction('export', exportGameChunksFromDevice)"`);
+  });
+
+  it("keeps the game fragment export switched off", () => {
+    // 2026-10-03 设备 67974c7e：原生 runExport 用老分片清单解析逐文件清单，一点就抛
+    // org.json.JSONException: No value for archiveFileName。短期不走这条路，先把入口关掉。
+    expect(appSource).toContain("const exportGameChunksEnabled: boolean = false;");
+    expect(appSource).toContain("exportGameChunksEnabled &&");
+    // 按钮还在，只是被 canExportGameChunks 关掉；恢复只需把这一个开关改成 true。
+    expect(appSource).toContain(`@click="runExclusiveAction('export', exportGameChunksFromDevice)"`);
   });
 
   it("never gates a download on the notification permission", () => {

@@ -232,7 +232,21 @@ const homeWarningText = computed(() => {
   if (phase.value === "error") return statusMessage.value;
   return "";
 });
+/**
+ * 2026-10-03 起暂时封禁「导出已下载碎片」。
+ *
+ * 原生 runExport 走的是老分片清单那套解析 —— `GameDownloadService.java:426` 无条件
+ * `DownloadPlan.parse(planJson)`，而逐文件清单里根本没有 `archiveFileName` 字段，
+ * 点一下就是 `org.json.JSONException: No value for archiveFileName`
+ * （设备 67974c7e，2026-10-03T11:47:26，事件 `game-download.export`）。
+ * 这条导出链路短期不打算走，先把入口整个关掉，避免玩家点了就报错。
+ *
+ * 要恢复：把下面改成 true，并同步修 `runExport` 的清单分支。
+ */
+const exportGameChunksEnabled: boolean = false;
+
 const canExportGameChunks = computed(() =>
+  exportGameChunksEnabled &&
   ["ready", "error"].includes(nativeDownloadStatus.value) &&
   totalChunks.value > 0 &&
   verifiedChunks.value === totalChunks.value,
@@ -547,7 +561,8 @@ const launcherUpdateButtonText = computed(() => {
 });
 
 const actionDisabled = computed(() =>
-  ["launcherChecking", "launcherUpdating", "launcherInstalling", "checking", "exporting", "verifying", "installing"].includes(phase.value),
+  Boolean(pendingAction.value)
+  || ["launcherChecking", "launcherUpdating", "launcherInstalling", "checking", "exporting", "verifying", "installing"].includes(phase.value),
 );
 
 async function waitForNativeDownloadStatus(
@@ -1189,6 +1204,25 @@ async function exportGameChunksFromDevice() {
   }
 }
 
+/**
+ * 防连点：长动作执行期间，第二次点击直接忽略。
+ *
+ * 原生那边起的是前台服务，两个任务撞在一起就会看到
+ * 「上一项游戏下载任务正在结束，请稍后再试。」（2026-10-01 设备 e033416a 连报 4 次），
+ * 所以从 UI 侧先拦一道。
+ */
+const pendingAction = ref("");
+
+async function runExclusiveAction(label: string, action: () => Promise<void>) {
+  if (pendingAction.value) return;
+  pendingAction.value = label;
+  try {
+    await action();
+  } finally {
+    pendingAction.value = "";
+  }
+}
+
 watch(downloadSource, (source) => {
   saveAndroidDownloadSource(source);
   void writeLauncherLog("info", "settings.download-source", source);
@@ -1372,8 +1406,8 @@ onBeforeUnmount(() => {
               <section class="setting-row" data-settings-section="game">
                 <div class="setting-copy"><strong>游戏管理</strong><span>{{ gameManagementHint }}</span></div>
                 <div class="setting-actions">
-                  <button type="button" :disabled="['installing', 'readyInstall'].includes(phase)" @click="importGameChunksFromDevice"><HardDriveDownload :size="22" />导入游戏碎片</button>
-                  <button type="button" :disabled="!canExportGameChunks" @click="exportGameChunksFromDevice"><UploadCloud :size="22" />导出已下载碎片</button>
+                  <button type="button" :disabled="Boolean(pendingAction) || ['installing', 'readyInstall'].includes(phase)" @click="runExclusiveAction('import', importGameChunksFromDevice)"><HardDriveDownload :size="22" />导入游戏碎片</button>
+                  <button type="button" :disabled="Boolean(pendingAction) || !canExportGameChunks" :title="exportGameChunksEnabled ? '' : '导出功能暂时关闭'" @click="runExclusiveAction('export', exportGameChunksFromDevice)"><UploadCloud :size="22" />导出已下载碎片</button>
                   <button v-if="gameManagementAction" class="danger-action" type="button" @click="handleGameManagementAction">
                     <component :is="gameManagementIcon" :size="22" />{{ gameManagementButtonText }}
                   </button>
@@ -1419,7 +1453,7 @@ onBeforeUnmount(() => {
             <p class="world-label">Crossing Void · illusion Dreamland</p>
             <h1>零境交错：空界幻境</h1>
             <p v-if="homeWarningText" class="update-warning"><CircleAlert :size="18" />{{ homeWarningText }}</p>
-            <button class="primary-action" type="button" :disabled="actionDisabled" @click="handlePrimaryAction">
+            <button class="primary-action" type="button" :disabled="actionDisabled" @click="runExclusiveAction('primary', handlePrimaryAction)">
               <component :is="actionIcon" :size="48" :class="{ spinning: primaryActionSpinning }" />
               <span>{{ actionText }}</span>
             </button>

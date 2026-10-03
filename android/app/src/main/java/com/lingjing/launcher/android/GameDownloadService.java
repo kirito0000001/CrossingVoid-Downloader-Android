@@ -60,6 +60,13 @@ public class GameDownloadService extends Service {
     public static final String EXTRA_EXPORT_TREE_URI = "exportTreeUri";
 
     private static final int MAX_ATTEMPTS = 3;
+
+    /**
+     * 逐文件下载下的目标动辄数百 MB（pakchunk0 就有 652 MB），移动网络很难一口气传完。
+     * 只要没传完就保留半成品，下一次 attempt 会接着续传，所以这里可以放心多给几次机会。
+     */
+    private static final int PACKAGE_MAX_ATTEMPTS = 6;
+
     private static final long STATE_INTERVAL_MS = 350L;
 
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
@@ -996,10 +1003,13 @@ public class GameDownloadService extends Service {
                     downloadedBytesForPackage(), packagePercent(), index, true, null);
                 continue;
             }
-            DownloadFileUtils.deleteFile(target);
+            if (target.isFile() && target.length() >= entry.sizeBytes) {
+                // 长度已经够了却没通过校验、或者比目标还长：这份半成品续传不了，只能重下。
+                DownloadFileUtils.deleteFile(target);
+            }
 
             Exception lastError = null;
-            for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            for (int attempt = 1; attempt <= PACKAGE_MAX_ATTEMPTS; attempt++) {
                 checkControlSignals();
                 try {
                     packageDownloader.download(entry, target);
@@ -1019,9 +1029,9 @@ public class GameDownloadService extends Service {
                     throw control;
                 } catch (Exception error) {
                     lastError = error;
-                    if (attempt < MAX_ATTEMPTS) {
+                    if (attempt < PACKAGE_MAX_ATTEMPTS) {
                         publishPackageState("downloading",
-                            "连接中断，正在重试 " + (attempt + 1) + " / " + MAX_ATTEMPTS,
+                            "连接中断，正在重试 " + (attempt + 1) + " / " + PACKAGE_MAX_ATTEMPTS,
                             downloadedBytesForPackage(), packagePercent(), index, true, null);
                         sleepWithControl(500L * attempt);
                     }

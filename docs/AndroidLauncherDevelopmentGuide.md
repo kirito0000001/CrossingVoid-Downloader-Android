@@ -455,6 +455,10 @@ xiaojie578/CrossingVoid-Downloader-PC
 
 依次检查：包名、证书 SHA-256、versionCode、未知来源安装权限、FileProvider URI。不要只看文件扩展名。
 
+启动器与游戏同包名，装游戏 APK 就是覆盖启动器自己，**签名必须完全一致，没有任何绕过手段**（让用户卸载重装也会再撞一次）。2026-10-03 设备 `d65004ff` 连报 36 次「目标游戏 APK 签名不一致」（北京 10:40:45–10:42:57）就是这一类。
+
+不要只看构建有没有报错：`android/app/build.gradle` 在 `CROSSINGVOID_GAME_KEYSTORE` 缺失时会**静默回退到 `~/.android/debug.keystore`**，出来的 APK 一样能装进模拟器，但和老用户的签名不是同一张。必须事后核对 APK 的实际签名。细节和核对方式见 `GamePakAndAndroidObbPatchDesign.md` §4.1。
+
 ### 下载完成后 OBB 不存在
 
 检查 ZIP 内是否真的有 `.obb`、`getObbDir()` 是否可用、临时文件重命名是否成功，以及状态是否错误地提前进入 `ready`。
@@ -490,6 +494,8 @@ dotnet publish --configuration Release --runtime win-x64 --self-contained true
 - [ ] 没有触碰 Unreal 项目。
 - [ ] 包名仍为 `com.TFAC.CorssingVoid`。
 - [ ] 签名 SHA-256 与游戏一致。
+- [ ] 构建机上四个 `CROSSINGVOID_GAME_*` 环境变量都已设置（否则会静默回退到 debug 签名，产物照样能构建成功）。
+- [ ] 产出的 APK 用 `apksigner verify --print-certs` 核对过实际签名，而不是只看构建成功。
 - [ ] `npm.cmd test` 全部通过。
 - [ ] `npm.cmd run build` 成功。
 - [ ] `npx.cmd cap sync android` 成功。

@@ -120,7 +120,8 @@ final class LauncherUpdateDownloader {
         Signature[] candidateSignatures = LauncherUpdateVerifier.packageSignatures(candidate);
         if (installedSignatures.length == 0 || candidateSignatures.length == 0 ||
             !LauncherUpdateVerifier.sameSignatures(installedSignatures, candidateSignatures)) {
-            throw new IOException("启动器安装包签名不一致");
+            throw new IOException("启动器安装包签名不一致：手机上的零境启动器与本次更新包不是同一个签名。"
+                + "Android 不允许跨签名覆盖安装，请先卸载已安装的零境启动器，再重新下载安装。");
         }
     }
 
